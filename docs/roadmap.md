@@ -106,3 +106,12 @@ CPU timing on this Apple Silicon Mac (Whisper Base Q8, four CPU threads, GPU dis
 with maximum individual decodes of 342–364 ms. This is below the 500 ms update step here, but costs more
 than locking the initial language and does not certify older Windows/Linux CPUs. The corrected universal
 app was rebuilt, ad-hoc signature verified, installed and reopened with the source picker ready.
+
+## Music decoding, live translation and typography — 2026-11-25
+
+- Restore whisper.cpp's temperature fallback for fast partial decodes. Disabling it allowed failed greedy
+  decodes to escape as repetition loops; a real official “God's Plan” preview reproduced the failure.
+- Preserve the visible translation while replacement prefixes stream; completed corrections remain revisable.
+- Preempt obsolete partial requests and interleave live progress with ordered final work. Do not restart a
+  partial on every same-segment word update, which would starve output during continuous speech.
+- Bundle Google Sans Flex locally with its OFL and trademark notices; no font request is sent to Google.

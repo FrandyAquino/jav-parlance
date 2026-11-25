@@ -10,6 +10,8 @@ on which two consecutive hypotheses agree. When the utterance ends, a full-conte
 and keeps the committed prefix frozen while the language remains consistent. In Auto mode every pass can
 re-detect the language; a corrected language resets agreement so an early wrong-language prefix cannot survive.
 Only a source language explicitly chosen by the user is forced.
+Fast passes retain whisper.cpp's temperature fallback. Disabling it can return failed low-entropy greedy
+decodes as long repetition loops, which was reproduced with a real music preview.
 
 **Alternatives.** SimulStreaming's AlignAtt policy needs decoder cross-attention access that `whisper-rs`
 does not expose; revisit if latency targets are missed. Cloud ASR is out of scope.

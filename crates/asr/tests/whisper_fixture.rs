@@ -128,3 +128,72 @@ fn spanish_final_recovers_after_an_ambiguous_half_second() {
     assert_eq!(final_update[0].language.as_ref().unwrap().as_str(), "es");
     assert!(final_update[0].text().to_lowercase().contains("migración"), "{}", final_update[0].text());
 }
+
+#[test]
+fn music_prefixes_do_not_expand_into_decoder_loops() {
+    use parlance_asr::{AsrError, DecodeOptions, Hypothesis, SpeechRecognizer};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let Some(fixture) = std::env::var_os("PARLANCE_MUSIC_FIXTURE") else {
+        eprintln!("skipping: set PARLANCE_MUSIC_FIXTURE to a licensed 16 kHz mono music WAV");
+        return;
+    };
+    let models = models_dir();
+    let model = models.join("ggml-base-q8_0.bin");
+    let vad = models.join("ggml-silero-v5.1.2.bin");
+    if !model.exists() || !vad.exists() {
+        eprintln!("skipping: models not installed");
+        return;
+    }
+    struct Bounded(WhisperRecognizer, Arc<AtomicUsize>);
+    impl SpeechRecognizer for Bounded {
+        fn transcribe(&mut self, audio: &[f32], options: &DecodeOptions) -> Result<Hypothesis, AsrError> {
+            let h = self.0.transcribe(audio, options)?;
+            if options.fast {
+                self.1.fetch_add(1, Ordering::Relaxed);
+            }
+            // This English test clip cannot contain twelve spoken words/second, plus sixteen words of slack.
+            let maximum = audio.len() * 12 / 16_000 + 16;
+            assert!(
+                h.text.split_whitespace().count() <= maximum,
+                "decoder expanded {} ms into {} words",
+                audio.len() * 1000 / 16_000,
+                h.text.split_whitespace().count()
+            );
+            Ok(h)
+        }
+    }
+    let mut reader = hound::WavReader::open(fixture).unwrap();
+    assert_eq!(reader.spec().sample_rate, 16_000);
+    assert_eq!(reader.spec().channels, 1);
+    let audio: Vec<f32> = reader.samples::<i16>().map(|s| f32::from(s.unwrap()) / 32_768.0).collect();
+    let mut gate = VadGate::new(Box::new(SileroVad::load(&vad).unwrap()), GateConfig::default());
+    let fast_calls = Arc::new(AtomicUsize::new(0));
+    let mut stream = StreamingTranscriber::new(
+        Bounded(WhisperRecognizer::load(&model, WhisperConfig::default()).unwrap(), fast_calls.clone()),
+        StreamingConfig::default(),
+    );
+    let mut final_words = 0;
+    for chunk in audio.chunks(1600) {
+        for event in gate.process(chunk).unwrap() {
+            stream.push(event);
+        }
+        for segment in stream.poll().unwrap() {
+            if segment.is_final() {
+                final_words += segment.text().split_whitespace().count();
+            }
+        }
+    }
+    for event in gate.flush() {
+        stream.push(event);
+    }
+    for segment in stream.flush().unwrap() {
+        if segment.is_final() {
+            final_words += segment.text().split_whitespace().count();
+        }
+    }
+    assert!(fast_calls.load(Ordering::Relaxed) > 0, "fixture must exercise fast decodes");
+    assert!(final_words > 0, "suppressing all recognition is not a fix");
+}

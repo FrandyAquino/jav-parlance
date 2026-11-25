@@ -15,7 +15,7 @@ non-blocking hand-off.
 | Replay thread | OS thread (`replay.rs`, tests/bench only) | Pace 10 ms chunks; retry pushes so no audio is lost | — |
 | `parlance-dsp` | OS thread (`session/src/dsp.rs`) | Drain rings, downmix, resample, mix, meter, run the VAD, `send` gate events (blocks when the ASR queue is full) | Decode speech, talk to the LLM |
 | `parlance-asr` | OS thread (`session/src/asr_worker.rs`) | Decode with whisper.cpp, emit events, call `SegmentListener::on_segment` | Await anything; listeners must return immediately |
-| Translation worker | Tokio task (`translation/src/worker.rs`) | Stream one translation at a time, in order | Be awaited by the ASR thread |
+| Translation worker | Tokio task (`translation/src/worker.rs`) | Keep final translations ordered and interleave the newest live partial | Be awaited by the ASR thread |
 | Copilot dispatcher | Tokio task (`copilot/src/worker.rs`) | Cancel the in-flight suggestion and spawn a new one per accepted question | — |
 | Suggestion task | Tokio task per question | Generate the reply, then translate it, publishing snapshots | Outlive cancellation |
 | `parlance-history` | OS thread (`storage/src/recorder.rs`) | Own the SQLite connection and write final lines/translations | Be called synchronously from ASR |
@@ -35,8 +35,8 @@ non-blocking hand-off.
 | Mixer lag | `StreamMixer` | `MAX_MIX_LAG` = 16 000 / 4 samples (250 ms) | A lagging source is padded with silence |
 | Events → UI | `EventHub` → Tauri `Channel` | n/a | Dropped while no window is subscribed; UI resyncs state on `subscribe` |
 
-Other tunables: level window 800 samples (20 Hz), DSP idle sleep 10 ms, ASR poll 50 ms, partial step 1 s,
-min partial 700 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre-roll, 20 s max utterance.
+Other tunables: level window 800 samples (20 Hz), DSP idle sleep 10 ms, ASR poll 50 ms, partial step 500 ms,
+min partial 500 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre-roll, 20 s max utterance.
 
 ## Backpressure
 
@@ -54,14 +54,19 @@ min partial 700 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre
 - `llama-server` runs with `--parallel 2` (8 192 tokens shared), so a translation and a suggestion can run at once.
   There is **no request-level prioritisation** between translation and copilot yet (ADR 0005 states translation is
   scheduled first; that scheduler is planned).
-- Partials are never translated; only finals.
+- Partials use one latest-wins slot. After each final translation, the worker gives the newest live partial
+  a turn before the next queued final. A final, a retracted utterance, a new segment or corrected source language
+  cancels an obsolete in-flight partial. Same-segment word additions do not repeatedly restart generation.
+- A completed preview remains visible while a replacement streams a shorter/different prefix. Appended text
+  can stream immediately; a completed corrected result may still replace or shorten the prior preview.
 
 ## Cancellation
 
 - `CancellationToken` everywhere on the async side. `LanguageModel::generate` selects on the token and drops the
   HTTP response, which makes `llama-server` abort the generation and free its slot.
 - Copilot: a new accepted question cancels the previous suggestion's child token. `on_session_end` cancels all.
-- Translation: `on_session_end` closes the queue so queued jobs can finish; dropping the worker cancels its token.
+- Translation: `on_session_end` closes the queue so final jobs can drain. Obsolete partial futures are cancelled
+  and dropped, including while waiting for model readiness/HTTP headers; intentional preemption emits no error.
 - Downloads: `cancel_download` cancels the token for that id; the partial file is removed.
 
 ## Shutdown ordering (`RunningPipeline::shutdown`, called from `SessionController::stop`)
