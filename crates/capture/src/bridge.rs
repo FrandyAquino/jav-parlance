@@ -148,7 +148,7 @@ fn relay(reader: &mut BufReader<TcpStream>, sink: &SinkSlot) {
                 if base64::engine::general_purpose::STANDARD.decode_vec(&pcm16_base64, &mut pcm).is_err() {
                     continue;
                 }
-                let frames: Vec<i16> = pcm.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+                let frames: Vec<i16> = pcm.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b)).collect();
                 samples.clear();
                 i16_to_f32(&frames, &mut samples);
                 if let Some(sink) = sink.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {

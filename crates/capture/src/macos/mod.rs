@@ -284,7 +284,7 @@ mod tests {
         let mut out = Vec::new();
         source.drain_into(&mut out);
         assert_eq!(out.len(), 2400);
-        assert!(out.chunks_exact(2).all(|f| f == [0.25, -0.5]));
+        assert!(out.as_chunks::<2>().0.iter().all(|f| *f == [0.25, -0.5]));
         let packed = [1.0, 2.0, 3.0, 4.0];
         assert!(copy_buffers(&mut sink, &[NativeBuffer { data: packed.as_ptr(), samples: 4, channels: 2 }]));
         out.clear();
