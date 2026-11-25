@@ -412,12 +412,14 @@ fn get_whisper_cpp_version(whisper_root: &std::path::Path) -> std::io::Result<Op
     Ok(None)
 }
 
-// PATCH(parlance): Windows ABIs give C enums a signed underlying type, but the
-// safe whisper-rs wrapper (written against Linux bindings) expects `c_uint`.
+// PATCH(parlance): MinGW bindings need unsigned enums to match whisper-rs.
+// MSVC uses signed enums in the wrapper and must retain bindgen's native types.
 // Both have the same size and calling convention, so retyping enum aliases
 // that have no negative variants is ABI-neutral.
 fn unsigned_enums_on_windows(bindings: String) -> String {
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
+        || env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("gnu")
+    {
         return bindings;
     }
     const SIGNED: &str = " = ::std::os::raw::c_int;";

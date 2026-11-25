@@ -8,8 +8,8 @@ Vendored from crates.io because the upstream build script passes the MSVC-only
 
 Remove this directory and the `[patch.crates-io]` entry once upstream ships the fix.
 See `docs/adr/0006-vendored-whisper-rs-sys.md`.
-- `build.rs`: on Windows targets, retype generated enum aliases from `c_int` to
-  `c_uint` (whisper-rs assumes Linux enum signedness; same size and ABI).
+- `build.rs`: on Windows GNU targets, retype generated enum aliases from `c_int` to
+  `c_uint` to match whisper-rs. Preserve native signed types on MSVC, whose wrapper uses `repr(i32)`.
 - `build.rs`: under MinGW, copy `ggml*.a` to `libggml*.a` so rustc finds them.
 - `build.rs`: link libstdc++ and winpthread statically under MinGW.
 - `build.rs`: disable `GGML_NATIVE` on Apple targets so packaged builds do not require the build machine's CPU.
