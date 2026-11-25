@@ -43,6 +43,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../src/assets/fonts/OFL.txt": "licenses/google-sans-flex/OFL.txt",
+      "../src/assets/fonts/TRADEMARKS.md": "licenses/google-sans-flex/TRADEMARKS.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

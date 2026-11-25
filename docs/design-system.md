@@ -37,7 +37,7 @@ Dark is the default when no theme attribute is present.
 
 ## Typography
 
-- Sans: Segoe UI Variable Text → Segoe UI → system (SF Pro) → Inter → Noto Sans. Mono: Cascadia Mono → SF Mono →
+- Sans: bundled Google Sans Flex → Segoe UI Variable Text → system (SF Pro) → Noto Sans. Mono: Cascadia Mono → SF Mono →
   JetBrains Mono.
 - Scale (px, via arbitrary Tailwind values): 10 (group labels, hover timestamps), 11 (column headings, metadata),
   12 (controls, hints, toasts), 13 (buttons, dialog body), 14 with `leading-relaxed` (transcript, replies).
