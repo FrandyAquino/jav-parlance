@@ -40,7 +40,7 @@ impl Job {
 #[derive(Default)]
 struct LatestPartial {
     job: Mutex<Option<Job>>,
-    last_text: Mutex<Option<(SegmentId, String)>>,
+    last_text: Mutex<Option<(SegmentId, String, Option<LanguageCode>)>>,
     ready: Notify,
 }
 
@@ -51,10 +51,13 @@ impl LatestPartial {
 
     fn offer(&self, job: Job) {
         let mut last = Self::lock(&self.last_text);
-        if last.as_ref().is_some_and(|(id, text)| *id == job.segment_id && *text == job.text) {
+        if last
+            .as_ref()
+            .is_some_and(|(id, text, language)| *id == job.segment_id && *text == job.text && *language == job.language)
+        {
             return;
         }
-        *last = Some((job.segment_id, job.text.clone()));
+        *last = Some((job.segment_id, job.text.clone(), job.language.clone()));
         *Self::lock(&self.job) = Some(job);
         self.ready.notify_one();
     }
@@ -192,14 +195,16 @@ impl Task {
                     self.remember(TranslatedLine { source: job.text, translation: text });
                 }
             }
-            Err(error) if !self.failed => {
-                self.failed = true;
-                tracing::warn!(%error, "translation failed");
-                (self.events)(SessionEvent::Notice {
-                    notice: Notice::warning(format!("Translation unavailable: {error}")),
-                });
+            Err(error) => {
+                self.emit(&job, String::new(), job.is_final);
+                if !self.failed {
+                    self.failed = true;
+                    tracing::warn!(%error, "translation failed");
+                    (self.events)(SessionEvent::Notice {
+                        notice: Notice::warning(format!("Translation unavailable: {error}")),
+                    });
+                }
             }
-            Err(_) => {}
         }
     }
 
@@ -308,5 +313,61 @@ mod tests {
         slot.offer(Job::from_segment(&segment(2, 0, "c", "en", Stability::Partial)));
         slot.discard(SegmentId(2));
         assert!(slot.take().is_none());
+    }
+
+    #[test]
+    fn language_correction_is_not_deduplicated_when_words_are_unchanged() {
+        let slot = LatestPartial::default();
+        slot.offer(Job::from_segment(&segment(1, 0, "hola", "en", Stability::Partial)));
+        slot.offer(Job::from_segment(&segment(1, 1, "hola", "es", Stability::Partial)));
+        let corrected = slot.take().unwrap();
+        assert_eq!(corrected.revision, 1);
+        assert_eq!(corrected.language.unwrap().as_str(), "es");
+    }
+
+    struct FailsFirst(std::sync::atomic::AtomicBool);
+
+    #[async_trait]
+    impl Translator for FailsFirst {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            on_token: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            if !self.0.swap(true, Ordering::SeqCst) {
+                on_token("al aeropuerto al aeropuerto ");
+                return Err(TranslationError::Model(parlance_llm::LlmError::Request("failed generation".into())));
+            }
+            Ok(format!("clean context={}", request.context.len()))
+        }
+    }
+
+    #[tokio::test]
+    async fn clears_rejected_streamed_text_and_does_not_remember_it() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(
+            Arc::new(FailsFirst(AtomicBool::new(false))),
+            LanguageCode::new("es").unwrap(),
+            sink,
+        );
+        worker.on_segment(&segment(1, 1, "first", "en", Stability::Final));
+        worker.on_segment(&segment(2, 1, "next", "en", Stability::Final));
+        worker.on_session_end();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if log.lock().unwrap().iter().any(|t| t.segment_id == SegmentId(2) && t.is_final) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let log = log.lock().unwrap();
+        let first = log.iter().rev().find(|t| t.segment_id == SegmentId(1)).unwrap();
+        assert!(first.text.is_empty(), "failed provisional output must not remain visible");
+        assert!(first.is_final);
+        assert_eq!(log.last().unwrap().text, "clean context=0");
     }
 }

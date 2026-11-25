@@ -32,7 +32,7 @@ Last updated: 2026-11-25.
 - [x] WASAPI endpoint loopback with silence filling and default-device reconnection
 - [x] Lock-free ring, downmix, FFT resampling, level meter, multi-source mixer
 - [x] Silero VAD (ggml) + hysteresis gate; energy fallback
-- [x] Streaming Whisper with LocalAgreement-2, stable ids, revisions, language lock
+- [x] Streaming Whisper with LocalAgreement-2, stable ids, revisions, revisable automatic language detection
 - [x] Session state machine, DSP/ASR threads, auto-stop on source end
 - [x] Desktop UI: glass window, source picker, meter, live transcript, settings, model downloads
 - [x] `parlance-cli` sources/listen/bench/download/llm
@@ -84,3 +84,25 @@ Last updated: 2026-11-25.
 - History titles are timestamps; renaming is not implemented.
 - The desktop crate has no Rust unit tests (`test = false`) because Windows test executables lack the
   Common Controls manifest Tauri needs; its logic is thin wiring covered through the core crates.
+
+## Spanish audio and repeated translation correction — 2026-11-25
+
+- Auto re-evaluates the language as more audio arrives; only an explicit source selection forces it.
+- Translation cancels and rejects generated short-phrase repetition beyond repetitions already present in
+  the source. Rejected provisional output is cleared and never added to translation context.
+- Same-text partials with a corrected language are processed again, allowing Spanish-to-Spanish passthrough.
+- Music/vocal recognition remains less reliable than speech; the exact user song is not part of the fixtures.
+
+Validation: the real Spanish fixture's 500 ms prefix initially detected Arabic; the complete phrase now
+recovers Spanish instead of inheriting that guess. Full Rust workspace: 163 passed plus one ignored subprocess
+helper; the final punctuation-preservation regression brings translation tests to 12. Clippy passed. A fake-model
+containment probe that previously streamed/accepted 60 repetitions now streams three and returns an error;
+this proves containment, not the exact trigger of the user's song. Live Qwen English-to-Spanish translation
+and the full Spanish fixture remained functional. The repetition allowance is heuristic and count-based,
+not a semantic proof that repeated output matches the source.
+
+CPU timing on this Apple Silicon Mac (Whisper Base Q8, four CPU threads, GPU disabled, warm shared context,
+22 growing-prefix decodes of the 11-second JFK fixture): Auto re-detection used compute RTF 0.244–0.257,
+with maximum individual decodes of 342–364 ms. This is below the 500 ms update step here, but costs more
+than locking the initial language and does not certify older Windows/Linux CPUs. The corrected universal
+app was rebuilt, ad-hoc signature verified, installed and reopened with the source picker ready.

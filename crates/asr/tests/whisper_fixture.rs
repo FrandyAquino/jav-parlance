@@ -71,3 +71,60 @@ fn streams_jfk_with_low_word_error_rate() {
     assert!(wer < 0.15, "WER too high: {wer}");
     assert!(updates.iter().filter(|s| s.is_final()).all(|s| s.language.as_ref().map(|l| l.as_str()) == Some("en")));
 }
+
+#[test]
+fn auto_detects_spanish_from_complete_utterances() {
+    let models = models_dir();
+    let (asr_model, vad_model) = (models.join("ggml-base-q8_0.bin"), models.join("ggml-silero-v5.1.2.bin"));
+    if !asr_model.exists() || !vad_model.exists() {
+        eprintln!("skipping: models not found in {}", models.display());
+        return;
+    }
+    let recognizer = WhisperRecognizer::load(&asr_model, WhisperConfig::default()).unwrap();
+    let vad = SileroVad::load(&vad_model).unwrap();
+    let mut gate = VadGate::new(Box::new(vad), GateConfig::default());
+    let mut transcriber = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+    let mut updates = Vec::new();
+    for chunk in read_fixture("meeting_question_es.wav").chunks(1_600) {
+        for event in gate.process(chunk).unwrap() {
+            transcriber.push(event);
+        }
+        updates.extend(transcriber.poll().unwrap());
+    }
+    for event in gate.flush() {
+        transcriber.push(event);
+    }
+    updates.extend(transcriber.flush().unwrap());
+    let finals: Vec<_> = updates.iter().filter(|s| s.is_final()).collect();
+    for segment in &finals {
+        eprintln!("{} {:?}: {}", segment.start_ms, segment.language, segment.text());
+    }
+    assert_eq!(finals.len(), 3);
+    assert!(
+        finals.iter().all(|s| s.language.as_ref().map(|l| l.as_str()) == Some("es")),
+        "Spanish speech must not stay locked to the first short guess"
+    );
+}
+
+#[test]
+fn spanish_final_recovers_after_an_ambiguous_half_second() {
+    let model = models_dir().join("ggml-base-q8_0.bin");
+    if !model.exists() {
+        eprintln!("skipping: Whisper model not installed");
+        return;
+    }
+    let recognizer = WhisperRecognizer::load(&model, WhisperConfig::default()).unwrap();
+    let mut transcriber = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+    let audio = read_fixture("meeting_question_es.wav");
+    // The real VAD starts the fixture's second utterance at 1912 ms.
+    let start = 1912 * 16;
+    transcriber.push(parlance_audio::vad::GateEvent::SpeechStarted { start_sample: start as u64 });
+    transcriber.push(parlance_audio::vad::GateEvent::Speech(audio[start..start + 8_000].to_vec()));
+    let early = transcriber.poll().unwrap();
+    eprintln!("short hypothesis: {:?}", early.iter().map(|s| (&s.language, s.text())).collect::<Vec<_>>());
+    transcriber.push(parlance_audio::vad::GateEvent::Speech(audio[start + 8_000..start + 48_000].to_vec()));
+    let final_update = transcriber.flush().unwrap();
+    assert_eq!(final_update.len(), 1);
+    assert_eq!(final_update[0].language.as_ref().unwrap().as_str(), "es");
+    assert!(final_update[0].text().to_lowercase().contains("migración"), "{}", final_update[0].text());
+}

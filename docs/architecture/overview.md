@@ -119,12 +119,16 @@ Per utterance:
 
 1. The VAD gate emits `SpeechStarted` (with 200 ms pre-roll), `Speech(samples)`, `SpeechEnded` (600 ms silence or
    20 s cap). Silero via whisper.cpp; energy VAD when the Silero model is missing.
-2. While open, the utterance is re-decoded after every 1 s of new audio once it is ≥ 700 ms long, with a reduced
+2. While open, the utterance is re-decoded after every 500 ms of new audio once it is ≥ 500 ms long, with a reduced
    `audio_ctx` ("fast" pass). LocalAgreement-2 commits the prefix two consecutive hypotheses agree on.
-3. On close, a full-context pass produces the `Final` revision; the committed prefix stays frozen.
+3. On close, a full-context pass produces the `Final` revision; the committed prefix stays frozen within the
+   same language. Auto re-detects on each pass and resets agreement if the language changes.
 4. Segment ids are stable; `revision` increases monotonically; the UI replaces rows in place.
-5. Final segments go to translation (in order, two previous lines as chat context) and to the copilot
-   (question detection → reply in the speaker's language → translation into the user's language).
+5. Partials are translated latest-wins; final segments are translated in order, using two successful prior lines
+   as context. If source and target match, translation is passthrough. Generated repetition exceeding the source
+   repetition allowance is cancelled, cleared from the view and excluded from context.
+6. Final segments also go to the copilot (question detection → reply in the speaker's language → translation
+   into the user's language).
 
 ## Session state machine
 

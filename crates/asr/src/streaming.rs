@@ -38,6 +38,13 @@ struct Utterance {
 }
 
 impl Utterance {
+    fn update_language(&mut self, language: Option<LanguageCode>) {
+        if self.language != language {
+            self.agreement = LocalAgreement::new();
+            self.language = language;
+        }
+    }
+
     fn segment(&mut self, stable: String, unstable: String, stability: Stability) -> TranscriptSegment {
         let segment = TranscriptSegment {
             id: self.id,
@@ -153,19 +160,15 @@ impl<R: SpeechRecognizer> StreamingTranscriber<R> {
             && utterance.pending_samples >= ms_to_samples(self.config.step_ms)
     }
 
-    fn options(&self, utterance: &Utterance, fast: bool) -> DecodeOptions {
-        DecodeOptions { language: utterance.language.clone().or_else(|| self.config.language.clone()), fast }
+    fn options(&self, fast: bool) -> DecodeOptions {
+        DecodeOptions { language: self.config.language.clone(), fast }
     }
 
     fn refresh_partial(&mut self, utterance: &mut Utterance) -> Result<Option<TranscriptSegment>, AsrError> {
         utterance.pending_samples = 0;
-        let options = self.options(utterance, true);
+        let options = self.options(true);
         let hypothesis = self.recognizer.transcribe(&utterance.audio, &options)?;
-        // Lock the detected language for the rest of the utterance: it is
-        // more stable and lets later passes skip detection.
-        if utterance.language.is_none() {
-            utterance.language = hypothesis.language;
-        }
+        utterance.update_language(options.language.or(hypothesis.language));
         if hypothesis.text.trim().is_empty() && !utterance.emitted {
             return Ok(None);
         }
@@ -177,11 +180,9 @@ impl<R: SpeechRecognizer> StreamingTranscriber<R> {
         if utterance.audio.is_empty() {
             return Ok(None);
         }
-        let options = self.options(utterance, false);
+        let options = self.options(false);
         let hypothesis = self.recognizer.transcribe(&utterance.audio, &options)?;
-        if utterance.language.is_none() {
-            utterance.language = hypothesis.language;
-        }
+        utterance.update_language(options.language.or(hypothesis.language));
         let text = utterance.agreement.finalize(&hypothesis.text);
         if text.trim().is_empty() && !utterance.emitted {
             return Ok(None);
@@ -226,6 +227,47 @@ mod tests {
 
     fn one_second() -> GateEvent {
         GateEvent::Speech(vec![0.1; TARGET_SAMPLE_RATE as usize])
+    }
+
+    struct AmbiguousStart;
+
+    impl SpeechRecognizer for AmbiguousStart {
+        fn transcribe(&mut self, audio: &[f32], options: &DecodeOptions) -> Result<Hypothesis, AsrError> {
+            let language = options
+                .language
+                .clone()
+                .unwrap_or_else(|| LanguageCode::new(if audio.len() <= 16_000 { "en" } else { "es" }).unwrap());
+            let text = if language.as_str() == "es" { "ayer terminamos el trabajo" } else { "the airport" };
+            Ok(Hypothesis { text: text.into(), language: Some(language) })
+        }
+    }
+
+    #[test]
+    fn auto_language_recovers_from_an_ambiguous_start_without_preserving_wrong_words() {
+        let mut t = StreamingTranscriber::new(AmbiguousStart, StreamingConfig::default());
+        t.push(GateEvent::SpeechStarted { start_sample: 0 });
+        for _ in 0..2 {
+            t.push(GateEvent::Speech(vec![0.1; 8_000]));
+            t.poll().unwrap();
+        }
+        t.push(one_second());
+        let correction = t.poll().unwrap();
+        assert_eq!(correction[0].language.as_ref().unwrap().as_str(), "es");
+        assert_eq!(correction[0].text(), "ayer terminamos el trabajo");
+        let final_update = t.flush().unwrap();
+        assert_eq!(final_update[0].text(), "ayer terminamos el trabajo");
+        assert_eq!(final_update[0].language.as_ref().unwrap().as_str(), "es");
+    }
+
+    #[test]
+    fn explicit_language_stays_forced_despite_ambiguous_audio() {
+        let config = StreamingConfig { language: Some(LanguageCode::new("es").unwrap()), ..Default::default() };
+        let mut t = StreamingTranscriber::new(AmbiguousStart, config);
+        t.push(GateEvent::SpeechStarted { start_sample: 0 });
+        t.push(GateEvent::Speech(vec![0.1; 8_000]));
+        let partial = t.poll().unwrap();
+        assert_eq!(partial[0].text(), "ayer terminamos el trabajo");
+        assert_eq!(t.flush().unwrap()[0].language.as_ref().unwrap().as_str(), "es");
     }
 
     #[test]
