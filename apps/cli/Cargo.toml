@@ -9,6 +9,9 @@ license.workspace = true
 name = "parlance-cli"
 path = "src/main.rs"
 
+[features]
+metal = ["parlance-asr/metal"]
+
 [dependencies]
 parlance-domain.workspace = true
 parlance-protocol.workspace = true

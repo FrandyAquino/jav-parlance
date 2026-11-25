@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -108,3 +109,50 @@ jobs:
           pnpm lint
           pnpm test
           pnpm build
+
+  bundles:
+    name: Installer (${{ matrix.os }})
+    needs: [rust, frontend]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libclang-dev cmake patchelf
+      - name: Point bindgen at LLVM
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - name: Build universal Mac installer
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          pnpm -C apps/desktop tauri build --target universal-apple-darwin
+      - name: Build Windows or Linux installer
+        if: runner.os != 'macOS'
+        run: pnpm build
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: parlance-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg

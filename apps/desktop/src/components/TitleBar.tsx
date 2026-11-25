@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Pin, PinOff, Settings, Sparkles, X } from "lucide-react";
+import { shortcutLabel } from "@/hooks/useShortcuts";
 import { languageName } from "@/lib/languages";
 import { cn } from "@/lib/cn";
 import { useApp } from "@/store/app";
@@ -24,6 +25,7 @@ export function TitleBar(props: TitleBarProps) {
   const state = useSession((s) => s.state);
   const detected = useSession((s) => s.detectedLanguage);
   const settings = useApp((s) => s.settings);
+  const platform = useApp((s) => s.info?.platform);
   const window = getCurrentWindow();
 
   const spoken = settings?.sourceLanguage ?? detected;
@@ -50,7 +52,7 @@ export function TitleBar(props: TitleBarProps) {
 
       <div data-tauri-drag-region className="h-full flex-1" />
 
-      <Tooltip label="Copilot (Ctrl+J)">
+      <Tooltip label={`Copilot (${shortcutLabel("J", platform)})`}>
         <Button
           size="icon"
           onClick={props.onToggleCopilot}
@@ -61,12 +63,12 @@ export function TitleBar(props: TitleBarProps) {
           <Sparkles className="size-3.5" />
         </Button>
       </Tooltip>
-      <Tooltip label={pinned ? "Unpin from top (Ctrl+T)" : "Keep on top (Ctrl+T)"}>
+      <Tooltip label={`${pinned ? "Unpin from top" : "Keep on top"} (${shortcutLabel("T", platform)})`}>
         <Button size="icon" onClick={props.onToggleAlwaysOnTop} aria-label="Toggle always on top" aria-pressed={pinned}>
           {pinned ? <Pin className="size-3.5" /> : <PinOff className="size-3.5" />}
         </Button>
       </Tooltip>
-      <Tooltip label="Settings (Ctrl+,)">
+      <Tooltip label={`Settings (${shortcutLabel(",", platform)})`}>
         <Button size="icon" onClick={props.onOpenSettings} aria-label="Settings">
           <Settings className="size-3.5" />
         </Button>

@@ -11,13 +11,13 @@ No account, no cloud, no paid API. Models download once, are SHA-256 verified, a
 afterwards.
 
 > Status: early development. See [`docs/roadmap.md`](docs/roadmap.md) for what works today and what is planned.
-> Windows is verified end to end. The Linux adapter compiles but is untested at runtime; native macOS capture
-> is not implemented yet.
+> Windows has end-to-end evidence. macOS has native system/app/microphone capture and Metal support; see
+> [Mac validation](docs/benchmarks/2026-11-25-macos.md). Linux runtime acceptance remains pending.
 
 ## How it works
 
 ```text
-system / app / mic / tab audio ─▶ capture (WASAPI · PulseAudio/PipeWire via parec · browser bridge)
+system / app / mic / tab audio ─▶ capture (WASAPI · Core Audio/ScreenCaptureKit · PulseAudio via parec · browser bridge)
    ─▶ lock-free ring buffer ─▶ downmix + resample to 16 kHz ─▶ Silero VAD
    ─▶ streaming Whisper (LocalAgreement-2 stabilization) ─▶ partial + final segments
    ─▶ translation + copilot (local Qwen via llama.cpp) ─▶ typed events ─▶ UI
@@ -40,7 +40,8 @@ Larger options (Whisper small / large-v3-turbo, Qwen3.5 4B) are available in Set
 ## Develop
 
 Prerequisites: Rust (stable), Node 22+, pnpm, CMake, a C/C++ compiler, and libclang for bindgen.
-Windows specifics (MinGW toolchain, no MSVC required): [`docs/platform/windows.md`](docs/platform/windows.md).
+Platform setup: [Windows](docs/platform/windows.md), [macOS 13.3+](docs/platform/macos.md), [Linux](docs/platform/linux.md).
+On Mac, `./scripts/setup-macos.sh` prepares dependencies and builds the workspace; normal builds include Metal.
 
 ```sh
 pnpm install
@@ -65,4 +66,3 @@ See [`docs/security.md`](docs/security.md).
 ## License
 
 MIT. Model licenses are listed above and in [`docs/research/model-licenses.md`](docs/research/model-licenses.md).
-# jav-parlance

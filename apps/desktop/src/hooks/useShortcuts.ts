@@ -2,6 +2,10 @@ import { useEffect } from "react";
 
 export type ShortcutMap = Record<string, () => void>;
 
+export function shortcutLabel(key: string, platform: string | undefined): string {
+  return `${platform === "macos" ? "⌘" : "Ctrl"}+${key}`;
+}
+
 /** Normalizes a keyboard event to e.g. `mod+enter`, `mod+,`. */
 export function shortcutKey(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "shiftKey">): string {
   const parts = [];

@@ -19,10 +19,7 @@ const JFK_REFERENCE: &str = "And so my fellow Americans, ask not what your count
 
 fn models_dir() -> PathBuf {
     std::env::var_os("PARLANCE_MODELS_DIR").map(PathBuf::from).unwrap_or_else(|| {
-        let base = std::env::var_os("LOCALAPPDATA")
-            .or_else(|| std::env::var_os("XDG_DATA_HOME"))
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let base = directories::BaseDirs::new().map(|dirs| dirs.data_local_dir().to_owned()).unwrap_or_default();
         base.join("parlance").join("models")
     })
 }

@@ -17,7 +17,8 @@ Last updated: 2026-11-25.
 | Meeting history (SQLite, opt-in) | Unit/integration tested | `crates/storage` tests; not yet exercised in the UI |
 | Browser tab capture (MV3 + native host + bridge) | Tested in isolation | Extension 31 tests, host 18 tests, bridge TCP tests; never loaded in a real browser |
 | Linux capture (pactl/parec) | Compiles for Linux | Cross `cargo check`; never run |
-| macOS capture (Core Audio taps) | Not started | — |
+| macOS capture and desktop | Verified on Apple Silicon | System/app/mic probes, live ASR/translation, universal app, Cmd+Q history flush; see [Mac evidence](benchmarks/2026-11-25-macos.md) |
+| macOS ScreenCaptureKit fallback (13.3–14.1) | Implemented, runtime unverified | Availability-guarded native adapter; needs older OS acceptance |
 
 ## Milestones
 
@@ -48,31 +49,33 @@ Last updated: 2026-11-25.
 - [x] Linux adapter (PulseAudio/PipeWire via pactl/parec, per-app via `--monitor-stream`)
 - [ ] Load the extension in Chrome/Edge and run an end-to-end tab session
 - [ ] Run the Linux adapter on PipeWire and PulseAudio hosts
-- [ ] macOS adapter: Core Audio process taps (14.2+), ScreenCaptureKit fallback, TCC prompts
+- [x] macOS adapter: Core Audio process taps (14.2+), ScreenCaptureKit fallback, TCC purpose strings and mic authorization
+- [ ] Validate fallback on macOS 13.3–14.1 and audio on an Intel Mac
 - [ ] Live-verify process loopback and microphone mixing on Windows
 
 ### M4 — Quality and performance
 - [ ] Cache loaded Whisper contexts across sessions (start latency for large models)
 - [x] Real-time translation of partial hypotheses (latest-wins), 500 ms ASR step
-- [ ] GPU Whisper builds (CUDA/Vulkan/Metal features) and runtime selection
+- [x] Metal Whisper enabled in normal Mac builds; portable CPU build flags
+- [ ] Validate CUDA/Vulkan Whisper builds and GPU selection on Windows/Linux
 - [ ] CTranslate2 translator adapter (MADLAD-400 / OPUS-MT) as an option
 - [ ] Global shortcuts, window position persistence, tray icon
 - [ ] Per-speaker separation (loopback vs microphone lanes) in the transcript
 - [ ] E2E tests driving the packaged app (tauri-driver/WebDriver)
-- [ ] Code signing and installers per OS
+- [x] Installer build workflow for Windows, Linux and universal macOS
+- [ ] Developer ID signing/notarization and signed release acceptance per OS
 
 ## Known issues (from review, 2026-11-25)
 
-- [ ] On app exit an active session is not stopped (history entry keeps no end time); on Linux/macOS
-      `llama-server` may outlive a crashed app (no parent-death signal; Windows uses a job object).
+- [x] Graceful exit stops capture, awaits the LLM and flushes history; Unix lifetime-pipe guardian covers app crashes.
 - [ ] Bridge: unlimited pre-auth connections (one thread each), accept thread never exits, no explicit ACL on
       the Windows discovery file, frame `sequence` unchecked.
 - [ ] Bridge relay locks a mutex per frame and WASAPI buffers may grow: capture paths are not strictly
       allocation/lock-free yet.
 - [ ] History commands run SQLite synchronously on the command thread; copilot/history queues are unbounded.
-- [ ] Catalog lacks `llama-server` for macOS x64 and ARM Windows/Linux.
-- [ ] UI: microphone cannot be the primary source; shortcuts show "Ctrl" on macOS; cancelling a download shows
-      an error toast; settings write errors map to `InvalidRequest`.
+- [x] Pinned official runtimes for macOS x64 and ARM Windows/Linux added.
+- [x] Primary microphone selection, Cmd labels on Mac, typed cancellation without an error toast.
+- [ ] Settings write errors map to `InvalidRequest`.
 
 ## Known limitations
 

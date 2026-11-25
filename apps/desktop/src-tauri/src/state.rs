@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use std::path::PathBuf;
@@ -24,6 +25,10 @@ pub struct AppState {
     pub downloads: Mutex<HashMap<String, CancellationToken>>,
     pub intelligence: Intelligence,
     pub history_db: PathBuf,
+    pub history_writers: Mutex<Vec<std::thread::JoinHandle<()>>>,
+    pub closing: AtomicBool,
+    pub shutdown_complete: AtomicBool,
+    pub session_requests: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -50,6 +55,10 @@ impl AppState {
             downloads: Mutex::new(HashMap::new()),
             intelligence,
             history_db,
+            history_writers: Mutex::new(Vec::new()),
+            closing: AtomicBool::new(false),
+            shutdown_complete: AtomicBool::new(false),
+            session_requests: tokio::sync::Mutex::new(()),
         })
     }
 

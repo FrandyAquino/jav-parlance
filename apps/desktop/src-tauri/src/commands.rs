@@ -137,12 +137,21 @@ pub fn session_state(state: State<'_, AppState>) -> SessionState {
 
 #[tauri::command]
 pub async fn start_session(state: State<'_, AppState>, request: StartSessionRequest) -> CommandResult<()> {
+    let _request = state.session_requests.lock().await;
+    if state.closing.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(invalid("Parlance is closing"));
+    }
     let settings = state.settings.get();
     let mut sources = vec![request.source_id];
     sources.extend(request.microphone_id);
     let recorder = settings
         .history_enabled
         .then(|| Arc::new(HistoryRecorder::start(state.history_db.clone(), settings.target_language.to_string())));
+    if let Some(completion) = recorder.as_ref().and_then(|r| r.take_completion()) {
+        let mut writers = state.history_writers.lock().unwrap_or_else(|p| p.into_inner());
+        writers.retain(|writer| !writer.is_finished());
+        writers.push(completion);
+    }
     let events = record_translations(state.events.sink(), recorder.clone());
     let mut listeners = state.intelligence.listeners(&settings, &events);
     listeners.extend(recorder.map(|r| r as Arc<dyn SegmentListener>));
@@ -182,6 +191,7 @@ pub fn delete_history(state: State<'_, AppState>, id: i64) -> CommandResult<()> 
 
 #[tauri::command]
 pub async fn stop_session(state: State<'_, AppState>) -> CommandResult<()> {
+    let _request = state.session_requests.lock().await;
     state.controller.stop().await.map_err(from_session)
 }
 

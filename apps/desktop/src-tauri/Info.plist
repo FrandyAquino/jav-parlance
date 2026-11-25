@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Parlance captures audio from your meetings for transcription and translation entirely on this Mac.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Parlance uses your microphone when you select it as a meeting audio source. Audio stays on this Mac.</string>
+</dict>
+</plist>

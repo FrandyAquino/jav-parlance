@@ -9,7 +9,7 @@ device. The only network traffic is the model downloads the user starts.
 flowchart LR
   user([User]) --> ui[React UI<br/>WebView]
   ui <-- "Tauri commands +<br/>SessionEvent channel" --> core[Rust core<br/>parlance-desktop]
-  os[(OS audio<br/>WASAPI · PulseAudio protocol)] --> core
+  os[(OS audio<br/>WASAPI · Core Audio/SCK · PulseAudio)] --> core
   browser[Chromium + extension] -- native messaging --> host[parlance-native-host]
   host -- "TCP 127.0.0.1 + token" --> core
   core -- "child process, HTTP 127.0.0.1 + API key" --> llama[llama-server sidecar]
@@ -27,7 +27,7 @@ flowchart LR
 | `crates/domain` | Pure types: `SourceId/Kind`, `TranscriptSegment`, `Translation`, `Suggestion`, `LanguageCode`, `SessionState` machine | Do I/O or depend on other crates |
 | `crates/protocol` | Wire contracts (`SessionEvent`, `IpcError`, `AppSettings`, models, native messaging framing). ts-rs export | Contain behaviour beyond (de)serialization and framing |
 | `crates/audio` | Lock-free ring (`rtrb`), downmix, i16→f32, resampling (`rubato`), mixer, level meter, VAD port + hysteresis gate | Know about devices or models |
-| `crates/capture` | `CaptureBackend` port, WASAPI (Windows), pactl/parec (Linux), browser bridge, replay, composite router | Do inference, I/O beyond the device, or block in the device loop |
+| `crates/capture` | `CaptureBackend` port, WASAPI (Windows), Core Audio/SCK (macOS), pactl/parec (Linux), browser bridge, replay, composite router | Do inference, I/O beyond the device, or block in the device loop |
 | `crates/asr` | `SpeechRecognizer` port, LocalAgreement-2, `StreamingTranscriber`, whisper.cpp + Silero adapters (feature `whisper`), WER metric | Know about sessions or the UI |
 | `crates/session` | `SessionController` (state machine owner), DSP and ASR threads, `SpeechEngine` / `SegmentListener` / `EventSink` ports | Talk to LLMs or storage directly (only via listeners) |
 | `crates/llm` | `LanguageModel` port, `LlamaServer` supervisor, SSE client, prompt isolation | Depend on any Parlance crate |
@@ -74,7 +74,7 @@ Allowed directions:
 | --- | --- | --- | --- |
 | Tauri main thread + webview | OS thread | Tauri | App |
 | Tokio runtime (Tauri async runtime) | thread pool | Tauri | App |
-| `parlance-wasapi-capture` / `parlance-parec` | OS thread per source | `CaptureStream` | Session |
+| `parlance-wasapi-capture` / `parlance-core-audio` / `parlance-parec` | OS thread per source | `CaptureStream` | Session |
 | `parec` | child process per source (Linux) | `ParecStream` | Session |
 | `parlance-dsp` | OS thread | `RunningPipeline` | Session |
 | `parlance-asr` | OS thread | `RunningPipeline` | Session |
@@ -82,7 +82,7 @@ Allowed directions:
 | Copilot dispatcher + one task per suggestion | Tokio tasks | `CopilotWorker` | Session |
 | `parlance-history` | OS thread | `HistoryRecorder` (only if history is on) | Session |
 | LLM supervisor + log forwarders | Tokio tasks | `LlamaServer` | While translation or copilot is enabled and models are installed |
-| `llama-server` | child process | `LlamaServer` (Job Object on Windows) | Same |
+| `llama-server` | child process | `LlamaServer` (Windows Job Object; Unix lifetime-pipe guardian) | Same |
 | `parlance-bridge` (accept) + `parlance-bridge-conn` (one per tab) | OS threads | `BridgeBackend` | App / per connection |
 | Model downloads | Tokio tasks (command futures) | `download_model` | Per download |
 

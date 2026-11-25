@@ -19,8 +19,13 @@ thiserror.workspace = true
 tracing.workspace = true
 whisper-rs = { workspace = true, optional = true, features = ["tracing_backend"] }
 
+# Metal is part of the normal Mac build, including `pnpm dev` and installers.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { workspace = true, optional = true, features = ["tracing_backend", "metal"] }
+
 [dev-dependencies]
 hound = "3"
+directories.workspace = true
 
 [lints]
 workspace = true

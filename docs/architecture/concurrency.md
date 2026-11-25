@@ -86,9 +86,12 @@ sequenceDiagram
 The same path runs automatically when every source ends: producers are abandoned → DSP exits → ASR finishes →
 the controller's watcher task calls `stop()`.
 
-App exit (`RunEvent::Exit`) calls `Intelligence::shutdown`, which cancels the LLM supervisor. On Windows the child is
-also in a Job Object with `KILL_ON_JOB_CLOSE`, so it dies with the app even on a crash. An active session is not
-stopped explicitly on exit.
+App exit (`RunEvent::ExitRequested`) prevents exit until the active start/stop request settles, stops capture,
+allows final translations/history up to 15 seconds to drain, then awaits LLM termination and joins writers.
+A bounded `RunEvent::Exit` fallback handles native macOS Quit paths that bypass `ExitRequested`. Total
+shutdown has a 30-second deadline; a timeout is logged as potentially incomplete history. New sessions are rejected while closing.
+Windows uses a Job Object with `KILL_ON_JOB_CLOSE`; Unix uses a guardian whose lifetime pipe closes even if the
+app is SIGKILLed. The guardian terminates the sidecar on EOF.
 
 ## Failure supervision
 
@@ -115,14 +118,12 @@ stopped explicitly on exit.
 
 **Linux parec**: restart after exit every 500 ms, up to 40 times; `app:<index>` does not reconnect.
 
+**macOS**: a monitor checks device/default/format changes outside the callback every 100 ms. A change or
+source termination produces `Failed` and releases the ring producer. Restart the session explicitly. Dropping
+the stream fences callbacks, destroys native resources, and joins the monitor before freeing its callback state.
+
 Capture events become UI notices (`DeviceLost` → warning, `Reconnected` → info, `Failed` → error).
 
 ## Known gaps
 
-- Stopping while `Starting` (Ctrl+Enter during start-up) can leave the pipeline running with state `Idle`: `stop()`
-  finds no pipeline yet, then `start()` stores one and fails `MarkRunning`.
-- The translation worker is dropped right after `on_session_end` (the ASR worker owns the only `Arc`), and its
-  `Drop` cancels the token, so translations still queued or in flight at stop are cancelled.
 - The bridge accept thread never exits and does not limit concurrent connections.
-- On Linux/macOS there is no process-group or parent-death hook for `llama-server`; it relies on the supervisor
-  task running `kill()` before the process exits.

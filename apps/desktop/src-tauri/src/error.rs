@@ -31,7 +31,7 @@ pub fn from_download(error: DownloadError) -> IpcError {
         DownloadError::Network(_) => ErrorCode::Network,
         DownloadError::ChecksumMismatch { .. } | DownloadError::SizeMismatch { .. } => ErrorCode::ModelCorrupt,
         DownloadError::Io(_) | DownloadError::Extract(_) => ErrorCode::Storage,
-        DownloadError::Cancelled => ErrorCode::InvalidRequest,
+        DownloadError::Cancelled => ErrorCode::Cancelled,
     };
     IpcError::new(code, error.to_string())
 }

@@ -2870,6 +2870,7 @@ dependencies = [
 name = "parlance-asr"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "hound",
  "parlance-audio",
  "parlance-domain",
@@ -2894,6 +2895,7 @@ name = "parlance-capture"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cc",
  "getrandom 0.3.4",
  "parlance-audio",
  "parlance-domain",

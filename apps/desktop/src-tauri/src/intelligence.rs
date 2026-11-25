@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use parlance_copilot::{CopilotWorker, SuggestionPolicy};
@@ -21,11 +22,12 @@ struct Running {
 pub struct Intelligence {
     store: ModelStore,
     running: Mutex<Option<Running>>,
+    closed: AtomicBool,
 }
 
 impl Intelligence {
     pub fn new(store: ModelStore) -> Self {
-        Self { store, running: Mutex::new(None) }
+        Self { store, running: Mutex::new(None), closed: AtomicBool::new(false) }
     }
 
     fn resolve(&self, model_id: &str) -> Option<(PathBuf, PathBuf)> {
@@ -41,6 +43,9 @@ impl Intelligence {
             .then(|| settings.language_model.clone())
             .filter(|id| self.resolve(id).is_some());
         let mut running = self.running.lock().unwrap_or_else(|p| p.into_inner());
+        if self.closed.load(Ordering::Acquire) {
+            return;
+        }
         if running.as_ref().map(|r| &r.model_id) == wanted.as_ref() {
             return;
         }
@@ -86,9 +91,11 @@ impl Intelligence {
         listeners
     }
 
-    pub fn shutdown(&self) {
-        if let Some(running) = self.running.lock().unwrap_or_else(|p| p.into_inner()).take() {
-            running.server.shutdown();
+    pub async fn shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        let running = self.running.lock().unwrap_or_else(|p| p.into_inner()).take();
+        if let Some(running) = running {
+            running.server.shutdown_and_wait().await;
         }
     }
 }

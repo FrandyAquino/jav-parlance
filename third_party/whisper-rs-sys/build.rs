@@ -188,6 +188,12 @@ fn main() {
 
     let mut config = Config::new(&whisper_root);
 
+    // PATCH(parlance): a Mac installer must run on older Apple Silicon and
+    // Intel CPUs too, not only the CPU of the machine building the bundle.
+    if target.contains("apple") {
+        config.define("GGML_NATIVE", "OFF");
+    }
+
     config
         .profile("Release")
         .define("BUILD_SHARED_LIBS", "OFF")

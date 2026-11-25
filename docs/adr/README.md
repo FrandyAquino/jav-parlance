@@ -15,3 +15,4 @@ Supersede a record by adding a new one and marking the old one `Superseded by NN
 | [0008](0008-wasapi-capture.md) | WASAPI capture with fixed format and silence filling | Accepted |
 | [0009](0009-model-integrity.md) | Pinned SHA-256 and staged model downloads | Accepted |
 | [0010](0010-browser-tab-bridge.md) | Browser tab audio via MV3 extension + native messaging | Accepted |
+| [0011](0011-macos-capture.md) | Core Audio taps, ScreenCaptureKit fallback and native Mac microphones | Accepted |
