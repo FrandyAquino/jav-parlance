@@ -1,0 +1,48 @@
+[package]
+name = "parlance-desktop"
+description = "Parlance desktop shell: composition root and Tauri IPC adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "parlance_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+# Windows test executables lack the Common Controls v6 manifest Tauri needs;
+# this crate is pure wiring, exercised by the core crates' tests and E2E runs.
+test = false
+doctest = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+parlance-domain.workspace = true
+parlance-protocol.workspace = true
+parlance-audio.workspace = true
+parlance-capture.workspace = true
+parlance-asr = { workspace = true, features = ["whisper"] }
+parlance-session.workspace = true
+parlance-models.workspace = true
+parlance-llm.workspace = true
+parlance-translation.workspace = true
+parlance-copilot.workspace = true
+parlance-storage.workspace = true
+directories.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tauri = { version = "2", features = [] }
+
+[features]
+cuda = ["parlance-asr/cuda"]
+metal = ["parlance-asr/metal"]
+vulkan = ["parlance-asr/vulkan"]
+
+[lints]
+workspace = true

@@ -1,0 +1,14 @@
+{
+  "name": "parlance",
+  "private": true,
+  "packageManager": "pnpm@12.23.0",
+  "scripts": {
+    "dev": "pnpm --filter @parlance/desktop tauri dev",
+    "build": "pnpm --filter @parlance/desktop tauri build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  }
+}

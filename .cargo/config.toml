@@ -1,0 +1,8 @@
+# Static CRT keeps MinGW builds free of runtime DLLs (libstdc++, winpthread)
+# that may resolve to incompatible copies on the user's PATH.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+# `cargo test` regenerates the TypeScript contracts consumed by the UI.
+TS_RS_EXPORT_DIR = { value = "apps/desktop/src/bindings", relative = true }

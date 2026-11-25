@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Keep LF endings so regenerated bindings compare cleanly on Windows.
+      - run: git config --global core.autocrlf input
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libclang-dev cmake
+
+      # bindgen (whisper-rs-sys) needs libclang. The Windows image ships LLVM; MSVC is the default
+      # toolchain there, so none of the local MinGW setup applies. macOS uses Xcode's libclang.
+      - name: Point bindgen at LLVM
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+
+      # apps/desktop/src-tauri uses tauri::generate_context!, which embeds apps/desktop/dist at compile
+      # time. The frontend job builds the real bundle; here a placeholder is enough to compile and test.
+      - name: Create placeholder frontend bundle
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/dist
+          [ -f apps/desktop/dist/index.html ] || echo '<!doctype html><title>Parlance</title>' > apps/desktop/dist/index.html
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # cargo test regenerates the ts-rs contracts; committed bindings must match.
+      - name: Check generated bindings
+        shell: bash
+        run: |
+          git diff --exit-code -- apps/desktop/src/bindings
+          untracked=$(git ls-files --others --exclude-standard -- apps/desktop/src/bindings)
+          if [ -n "$untracked" ]; then
+            echo "Untracked generated bindings (run cargo test and commit them):"
+            echo "$untracked"
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from the root package.json `packageManager` field.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Desktop
+        working-directory: apps/desktop
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build
+
+      - name: Extension
+        working-directory: apps/extension
+        run: |
+          pnpm typecheck
+          pnpm lint
+          pnpm test
+          pnpm build

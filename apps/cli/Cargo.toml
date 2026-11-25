@@ -1,0 +1,32 @@
+[package]
+name = "parlance-cli"
+description = "Headless developer tool: list sources, live-transcribe and benchmark the pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "parlance-cli"
+path = "src/main.rs"
+
+[dependencies]
+parlance-domain.workspace = true
+parlance-protocol.workspace = true
+parlance-audio.workspace = true
+parlance-capture.workspace = true
+parlance-asr = { workspace = true, features = ["whisper"] }
+parlance-session.workspace = true
+parlance-models.workspace = true
+parlance-llm.workspace = true
+parlance-translation.workspace = true
+anyhow.workspace = true
+clap = { version = "4", features = ["derive"] }
+hound = "3"
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+tracing-subscriber.workspace = true
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Parlance tab audio",
+  "version": "0.1.0",
+  "description": "Send a browser tab's audio to the Parlance desktop app for on-device transcription.",
+  "minimum_chrome_version": "116",
+  "permissions": ["tabCapture", "offscreen", "nativeMessaging", "activeTab"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Parlance tab audio" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+  }
+}

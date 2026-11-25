@@ -1,0 +1,24 @@
+[package]
+name = "parlance-copilot"
+description = "Conversation intelligence: question detection, rolling context and bilingual reply suggestions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+parlance-domain.workspace = true
+parlance-protocol.workspace = true
+parlance-session.workspace = true
+parlance-llm.workspace = true
+parlance-translation.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,133 @@
+/* Dark tokens shared with the desktop app (apps/desktop/src/styles.css). */
+:root {
+  color-scheme: dark;
+  --backdrop: #0c0e15;
+  --surface: rgb(16 18 26 / 0.62);
+  --surface-raised: rgb(255 255 255 / 0.06);
+  --line: rgb(255 255 255 / 0.09);
+  --ink: #eceef5;
+  --ink-muted: #a1a7ba;
+  --ink-faint: #6c7286;
+  --accent: #86a8ff;
+  --accent-ink: #0b1020;
+  --record: #ff5c5c;
+  --warn: #f5b759;
+  --radius: 14px;
+  font-family:
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    "SF Pro Text",
+    "Inter",
+    "Noto Sans",
+    system-ui,
+    sans-serif;
+}
+
+body {
+  margin: 0;
+  width: 280px;
+  background: var(--backdrop);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.panel {
+  display: grid;
+  gap: 12px;
+  margin: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  backdrop-filter: blur(24px) saturate(140%);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-faint);
+}
+
+.dot[data-state="starting"] {
+  background: var(--accent);
+}
+
+.dot[data-state="capturing"] {
+  background: var(--record);
+  box-shadow: 0 0 0 3px rgb(255 92 92 / 0.18);
+}
+
+.dot[data-state="error"] {
+  background: var(--warn);
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+
+.status[data-state="error"] {
+  color: var(--warn);
+}
+
+.toggle {
+  min-height: 36px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    opacity 120ms ease;
+}
+
+.toggle[data-active="true"] {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.toggle:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle {
+    transition: none;
+  }
+}

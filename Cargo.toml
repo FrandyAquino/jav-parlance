@@ -1,0 +1,66 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/desktop/src-tauri", "apps/cli", "apps/native-host"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+repository = "https://github.com/parlance-app/parlance"
+
+[workspace.dependencies]
+parlance-domain = { path = "crates/domain" }
+parlance-protocol = { path = "crates/protocol" }
+parlance-audio = { path = "crates/audio" }
+parlance-capture = { path = "crates/capture" }
+parlance-asr = { path = "crates/asr", default-features = false }
+parlance-llm = { path = "crates/llm" }
+parlance-translation = { path = "crates/translation" }
+parlance-copilot = { path = "crates/copilot" }
+parlance-storage = { path = "crates/storage" }
+parlance-models = { path = "crates/models" }
+parlance-session = { path = "crates/session" }
+
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+rtrb = "0.4"
+rubato = "5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "net"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = { version = "12", features = ["serde-compat"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+directories = "6"
+whisper-rs = "0.16"
+wasapi = "0.27"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+dbg_macro = "deny"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+# whisper-rs-sys 0.15.0 does not build with MinGW; see third_party/whisper-rs-sys/PATCHES.md.
+[patch.crates-io]
+whisper-rs-sys = { path = "third_party/whisper-rs-sys" }

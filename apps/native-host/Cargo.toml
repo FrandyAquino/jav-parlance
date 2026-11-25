@@ -1,0 +1,26 @@
+[package]
+name = "parlance-native-host"
+description = "Chromium native messaging host that relays browser-tab audio to the Parlance desktop app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "parlance-native-host"
+path = "src/main.rs"
+
+[dependencies]
+parlance-protocol.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+directories.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

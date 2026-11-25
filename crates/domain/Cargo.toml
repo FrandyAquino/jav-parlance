@@ -1,0 +1,17 @@
+[package]
+name = "parlance-domain"
+description = "Platform-independent domain model for Parlance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+ts-rs.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

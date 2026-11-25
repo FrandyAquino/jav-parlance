@@ -1,0 +1,22 @@
+[package]
+name = "parlance-audio"
+description = "Real-time safe audio plumbing: ring buffer, normalization, resampling, metering and VAD gating"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+parlance-domain.workspace = true
+rtrb.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false }
+
+[[bench]]
+name = "dsp"
+harness = false
+
+[lints]
+workspace = true

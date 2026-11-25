@@ -1,0 +1,26 @@
+[package]
+name = "parlance-capture"
+description = "Native audio capture adapters (WASAPI, Core Audio taps, PipeWire/PulseAudio)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+parlance-domain.workspace = true
+parlance-audio.workspace = true
+parlance-protocol.workspace = true
+base64 = "0.22"
+getrandom = "0.3"
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+wasapi.workspace = true
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "parlance-asr"
+description = "Incremental speech recognition: recognizer port, whisper.cpp adapter and LocalAgreement stabilization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["whisper"]
+whisper = ["dep:whisper-rs"]
+cuda = ["whisper", "whisper-rs/cuda"]
+metal = ["whisper", "whisper-rs/metal"]
+vulkan = ["whisper", "whisper-rs/vulkan"]
+
+[dependencies]
+parlance-domain.workspace = true
+parlance-audio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+whisper-rs = { workspace = true, optional = true, features = ["tracing_backend"] }
+
+[dev-dependencies]
+hound = "3"
+
+[lints]
+workspace = true

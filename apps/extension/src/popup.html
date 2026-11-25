@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark" />
+    <title>Parlance tab audio</title>
+    <link rel="stylesheet" href="./popup.css" />
+    <script type="module" src="./popup.ts"></script>
+  </head>
+  <body>
+    <main class="panel" aria-labelledby="title">
+      <header class="header">
+        <span class="dot" data-state="idle" aria-hidden="true"></span>
+        <h1 id="title">Parlance</h1>
+      </header>
+      <p id="status" class="status" role="status" aria-live="polite">Checking…</p>
+      <button id="toggle" class="toggle" type="button" disabled>Start capture</button>
+      <p class="hint">Audio stays on this computer. Parlance must be open.</p>
+    </main>
+  </body>
+</html>
