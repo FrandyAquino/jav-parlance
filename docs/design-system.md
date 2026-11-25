@@ -112,3 +112,14 @@ Dark is the default when no theme attribute is present.
 - Do mark copyable content `.selectable`; don't make chrome selectable.
 - Don't animate beyond short color/transform transitions, and always respect reduced motion.
 - Don't hand-write IPC types; import from `@/bindings`.
+
+## Glass layer (2026-11-25)
+
+- Surfaces float as frosted panels over an ambient light field (`.ambient`) inside the window, plus a faint
+  `NoiseTexture` grain. Utilities in `styles.css`: `glass` (panels), `glass-strong` (popovers, dialog, toasts),
+  `glass-accent` (copilot). Tokens: `--glass`, `--glass-strong`, `--glass-border`, `--glass-highlight`,
+  `--glass-accent(-border)`, `--ambient-a/b/c`, defined for dark and light themes.
+- Shadcn-compatible registry components from Magic UI (`components.json` registries `@magicui`, `@reui`):
+  `ui/noise-texture`, `ui/progressive-blur` (fades transcript under the panel edge), `ui/border-beam` wrapped by
+  `LiveBeam` (recording / copilot generating). `LiveBeam` renders nothing under reduced motion.
+- Add more registry items with `npx shadcn@latest add @magicui/<item>` from `apps/desktop`.

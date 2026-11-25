@@ -28,9 +28,9 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
-        <Dialog.Content className="window fixed inset-3 z-50 flex flex-col overflow-hidden shadow-2xl backdrop-blur-xl">
-          <header className="flex h-11 shrink-0 items-center border-b border-line px-4">
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[2px]" />
+        <Dialog.Content className="glass-strong fixed inset-3 z-50 flex flex-col overflow-hidden rounded-[var(--radius-window)]">
+          <header className="flex h-11 shrink-0 items-center border-b border-[var(--glass-border)] px-4">
             <Dialog.Title className="flex-1 text-[13px] font-medium text-ink">Settings</Dialog.Title>
             <Dialog.Close asChild>
               <Button size="icon" aria-label="Close settings">
@@ -40,7 +40,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
           </header>
           <Dialog.Description className="sr-only">Languages, assistant, models and privacy</Dialog.Description>
 
-          <div className="flex-1 space-y-6 overflow-y-auto px-5 py-4">
+          <div className="flex-1 space-y-3 overflow-y-auto p-3">
             <Section title="Languages">
               <Field label="Spoken language">
                 <Select
@@ -118,7 +118,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section>
+    <section className="glass rounded-xl px-4 py-3">
       <h3 className="mb-1.5 text-[12px] font-medium text-ink">{title}</h3>
       {children}
     </section>

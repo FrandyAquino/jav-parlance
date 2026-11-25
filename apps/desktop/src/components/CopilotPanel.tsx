@@ -2,6 +2,7 @@ import { Copy, Sparkles } from "lucide-react";
 import type { Suggestion } from "@/bindings/Suggestion";
 import { languageName } from "@/lib/languages";
 import { useSession } from "@/store/session";
+import { LiveBeam } from "./LiveBeam";
 import { Button } from "./ui/button";
 import { Tooltip } from "./ui/tooltip";
 
@@ -9,7 +10,11 @@ export function CopilotPanel({ enabled }: { enabled: boolean }) {
   const latest = useSession((s) => s.suggestions[0]);
 
   return (
-    <section aria-label="Copilot" className="max-h-[45%] shrink-0 overflow-y-auto border-t border-line px-5 py-3">
+    <section
+      aria-label="Copilot"
+      className="glass-accent relative max-h-[45%] shrink-0 overflow-y-auto rounded-xl px-5 py-3"
+    >
+      <LiveBeam active={Boolean(latest && !latest.isComplete)} tone="accent" />
       {!enabled ? (
         <Hint>The copilot is off. Turn it on in Settings to get suggested replies.</Hint>
       ) : latest ? (

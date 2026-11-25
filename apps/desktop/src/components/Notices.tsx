@@ -30,7 +30,7 @@ function Toast({ level, message, onDismiss }: { level: string; message: string; 
   return (
     <div
       className={cn(
-        "pointer-events-auto flex items-start gap-2 rounded-lg border border-line bg-[var(--surface)] px-3 py-2 text-[12px] text-ink shadow-lg backdrop-blur",
+        "glass-strong pointer-events-auto flex items-start gap-2 rounded-lg px-3 py-2 text-[12px] text-ink",
         level === "error" && "border-record/40",
         level === "warning" && "border-warn/40",
       )}

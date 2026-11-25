@@ -30,7 +30,7 @@ export function ModelList() {
       {kinds.map((kind) => (
         <div key={kind}>
           <h4 className="mb-1 text-[11px] font-medium text-ink-faint">{KIND_LABEL[kind]}</h4>
-          <ul className="divide-y divide-line rounded-lg border border-line">
+          <ul className="divide-y divide-[var(--glass-border)] overflow-hidden rounded-lg border border-[var(--glass-border)] bg-[var(--glass)]">
             {models
               .filter((m) => m.kind === kind)
               .map((model) => (

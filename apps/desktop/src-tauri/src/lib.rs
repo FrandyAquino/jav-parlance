@@ -14,7 +14,9 @@ use tracing_subscriber::EnvFilter;
 
 pub fn run() {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,parlance=debug")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,parlance=debug,whisper_rs=warn")),
+        )
         .init();
 
     tauri::Builder::default()

@@ -53,7 +53,7 @@ Last updated: 2026-11-25.
 
 ### M4 — Quality and performance
 - [ ] Cache loaded Whisper contexts across sessions (start latency for large models)
-- [ ] Translate stabilized partials (debounced) for lower perceived latency
+- [x] Real-time translation of partial hypotheses (latest-wins), 500 ms ASR step
 - [ ] GPU Whisper builds (CUDA/Vulkan/Metal features) and runtime selection
 - [ ] CTranslate2 translator adapter (MADLAD-400 / OPUS-MT) as an option
 - [ ] Global shortcuts, window position persistence, tray icon

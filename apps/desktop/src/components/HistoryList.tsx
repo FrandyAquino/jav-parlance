@@ -42,7 +42,7 @@ export function HistoryList() {
   if (entries.length === 0) return <p className="text-[12px] text-ink-faint">No saved meetings yet.</p>;
 
   return (
-    <ul className="divide-y divide-line rounded-lg border border-line">
+    <ul className="divide-y divide-[var(--glass-border)] overflow-hidden rounded-lg border border-[var(--glass-border)] bg-[var(--glass)]">
       {entries.map((entry) => (
         <li key={entry.id} className="flex items-center gap-2 px-3 py-2">
           <div className="min-w-0 flex-1">

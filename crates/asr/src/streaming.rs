@@ -9,7 +9,9 @@ use crate::recognizer::{AsrError, DecodeOptions, SpeechRecognizer};
 
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
-    /// New audio required before re-decoding the open utterance.
+    /// New audio required before re-decoding the open utterance. 500 ms keeps
+    /// words appearing (and being translated) while the speaker talks; slow
+    /// machines self-throttle because decoding drains the backlog first.
     pub step_ms: u32,
     /// Utterances shorter than this are not decoded as partials.
     pub min_partial_ms: u32,
@@ -19,7 +21,7 @@ pub struct StreamingConfig {
 
 impl Default for StreamingConfig {
     fn default() -> Self {
-        Self { step_ms: 1_000, min_partial_ms: 700, language: None }
+        Self { step_ms: 500, min_partial_ms: 500, language: None }
     }
 }
 
@@ -252,11 +254,14 @@ mod tests {
     fn waits_for_a_full_step_before_decoding_again() {
         let mut t = transcriber("a b");
         t.push(GateEvent::SpeechStarted { start_sample: 0 });
-        t.push(GateEvent::Speech(vec![0.1; 8_000]));
+        t.push(GateEvent::Speech(vec![0.1; 4_000]));
         assert!(!t.has_work());
         assert!(t.poll().unwrap().is_empty());
-        t.push(GateEvent::Speech(vec![0.1; 8_000]));
+        t.push(GateEvent::Speech(vec![0.1; 4_000]));
         assert!(t.has_work());
+        t.poll().unwrap();
+        t.push(GateEvent::Speech(vec![0.1; 4_000]));
+        assert!(!t.has_work(), "less than one step of new audio");
     }
 
     #[test]

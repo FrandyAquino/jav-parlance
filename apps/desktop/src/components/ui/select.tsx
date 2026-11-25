@@ -49,7 +49,7 @@ export function Select({ value, options, onChange, placeholder, label, icon, dis
         <SelectPrimitive.Content
           position="popper"
           sideOffset={4}
-          className="z-50 max-h-80 min-w-56 overflow-hidden rounded-xl border border-line bg-[var(--surface)] text-[12px] text-ink shadow-xl backdrop-blur-xl"
+          className="glass-strong z-50 max-h-80 min-w-56 overflow-hidden rounded-xl text-[12px] text-ink"
         >
           <SelectPrimitive.Viewport className="p-1">
             {groupOptions(options).map(([group, items]) => (

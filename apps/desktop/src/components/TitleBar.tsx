@@ -30,7 +30,7 @@ export function TitleBar(props: TitleBarProps) {
   const pinned = settings?.alwaysOnTop ?? true;
 
   return (
-    <header data-tauri-drag-region className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-2">
+    <header data-tauri-drag-region className="glass flex h-11 shrink-0 items-center gap-1 rounded-xl px-2">
       <SessionControls canStart={props.canStart} onToggle={props.onToggleSession} onPauseToggle={props.onTogglePause} />
       <SourcePicker disabled={isActive(state)} />
       <LevelMeter />

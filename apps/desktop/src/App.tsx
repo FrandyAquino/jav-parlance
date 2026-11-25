@@ -6,6 +6,7 @@ import { Notices } from "./components/Notices";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TitleBar } from "./components/TitleBar";
 import { TranscriptView } from "./components/TranscriptView";
+import { NoiseTexture } from "./components/ui/noise-texture";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useTheme } from "./hooks/useTheme";
@@ -86,7 +87,9 @@ export function App() {
 
   return (
     <TooltipProvider>
-      <main className="window relative flex h-full flex-col overflow-hidden">
+      <main className="window relative flex h-full flex-col gap-2 overflow-hidden p-2">
+        <div className="ambient" aria-hidden />
+        <NoiseTexture className="-z-10 rounded-[inherit] opacity-[0.07] dark:opacity-[0.09]" aria-hidden />
         <TitleBar
           canStart={canStart}
           copilotOpen={copilotOpen}

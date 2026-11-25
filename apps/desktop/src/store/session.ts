@@ -80,11 +80,17 @@ function applySegment(view: SessionView, segment: TranscriptSegment): SessionVie
   return { ...view, rows: evicted.length > 0 ? without(rows, evicted) : rows, order };
 }
 
+/** Older source revisions, and partial text racing a final, never replace what is shown. */
+function isStale(current: Translation, incoming: Translation): boolean {
+  if (current.sourceRevision > incoming.sourceRevision) return true;
+  return current.isFinal && !incoming.isFinal && current.sourceRevision >= incoming.sourceRevision;
+}
+
 function applyTranslation(view: SessionView, translation: Translation): SessionView {
   const row = view.rows[translation.segmentId];
   if (!row) return view;
   const current = row.translation;
-  if (current && current.sourceRevision > translation.sourceRevision) return view;
+  if (current && isStale(current, translation)) return view;
   return { ...view, rows: { ...view.rows, [translation.segmentId]: { ...row, translation } } };
 }
 

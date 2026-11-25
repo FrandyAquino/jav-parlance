@@ -46,6 +46,19 @@ describe("reduceSession", () => {
     expect(view.rows[1]?.translation?.text).toBe("hello");
   });
 
+  it("never lets a partial translation overwrite the final one", () => {
+    let view = apply(initialSession, segment(1, 0, "hola"));
+    const base = { segmentId: 1, targetLanguage: "en", sourceRevision: 3 };
+    view = reduceSession(view, { type: "translation", translation: { ...base, text: "hello", isFinal: true } });
+    view = reduceSession(view, { type: "translation", translation: { ...base, text: "hel", isFinal: false } });
+    expect(view.rows[1]?.translation?.text).toBe("hello");
+    view = reduceSession(view, {
+      type: "translation",
+      translation: { ...base, sourceRevision: 4, text: "hello again", isFinal: false },
+    });
+    expect(view.rows[1]?.translation?.text).toBe("hello again");
+  });
+
   it("bounds memory for long meetings", () => {
     const segments = Array.from({ length: MAX_ROWS + 10 }, (_, i) => segment(i + 1, 0, `s${i}`, true));
     const view = apply(initialSession, ...segments);
