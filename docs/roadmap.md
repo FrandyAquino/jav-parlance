@@ -1,5 +1,8 @@
 # Roadmap and progress
 
+Source of truth for what works. "Verified" means exercised on real hardware, not only unit-tested.
+Last updated: 2026-11-27.
+
 ## Audit blocker corrections — 2026-11-27
 
 Local corrections add session-scoped translation presentation, causal transcript/history ordering, preservation
@@ -9,9 +12,6 @@ reconnect/retry. Regression tests use scripted ports, temporary SQLite, loopback
 or Chrome API promises; see [testing](testing.md). These protections do not certify real devices, native
 permissions, model accuracy, browser capture or installer CPU compatibility. Verification evidence for this
 local implementation is kept separately from the prior audit snapshot.
-
-Source of truth for what works. "Verified" means exercised on real hardware, not only unit-tested.
-Last updated: 2026-11-25.
 
 ## Status at a glance
 
@@ -24,9 +24,9 @@ Last updated: 2026-11-25.
 | Translation (Qwen3.5 via llama-server) | Verified | Live session; 0.3 s warm per sentence on GTX 1650 |
 | Copilot (question detection + bilingual reply) | Verified | Live session with `meeting_question_en.wav` |
 | Model manager (pinned SHA-256) | Verified | Downloaded and verified 4 artifacts |
-| Meeting history (SQLite, opt-in) | Unit/integration tested | `crates/storage` tests; not yet exercised in the UI |
-| Browser tab capture (MV3 + native host + bridge) | Tested in isolation | Extension 31 tests, host 18 tests, bridge TCP tests; never loaded in a real browser |
-| Linux capture (pactl/parec) | Compiles for Linux | Cross `cargo check`; never run |
+| Meeting history (SQLite, opt-in) | Automated storage/wiring tests; macOS shutdown persistence exercised | `crates/storage`, Linux desktop library tests and [Mac evidence](benchmarks/2026-11-25-macos.md); broad UI acceptance remains pending |
+| Browser tab capture (MV3 + native host + bridge) | Tested in isolation | DSP/protocol and deferred Chrome lifecycle tests; not yet verified in a real browser |
+| Linux capture (pactl/parec) | Builds; isolated lifecycle regressions pass | Synthetic child-process reconnection/reaping tests; real PulseAudio/PipeWire capture remains unverified |
 | macOS capture and desktop | Verified on Apple Silicon | System/app/mic probes, live ASR/translation, universal app, Cmd+Q history flush; see [Mac evidence](benchmarks/2026-11-25-macos.md) |
 | macOS ScreenCaptureKit fallback (13.3–14.1) | Implemented, runtime unverified | Availability-guarded native adapter; needs older OS acceptance |
 | Adaptive window, local project profiles and written copilot | Implemented locally; native flow exercised on Apple Silicon | [Contextual copilot evidence](benchmarks/2026-11-25-adaptive-copilot.md); Windows/Linux native acceptance remains unrun for this change |
@@ -86,15 +86,15 @@ Last updated: 2026-11-25.
 - [ ] History commands run SQLite synchronously on the command thread; the history queue is unbounded. Copilot now uses bounded ingress and one active/latest pending request.
 - [x] Pinned official runtimes for macOS x64 and ARM Windows/Linux added.
 - [x] Primary microphone selection, Cmd labels on Mac, typed cancellation without an error toast.
-- [ ] Settings write errors map to `InvalidRequest`.
+- [x] Settings persistence failures map to `Storage`; invalid model selections remain `InvalidRequest`.
 
 ## Known limitations
 
 - Copilot reply quality is bounded by the 2B default model; 4B is noticeably better with a GPU.
 - Whisper occasionally drops question marks (notably in Spanish); the detector compensates with request phrases.
 - History titles are timestamps; renaming is not implemented.
-- The desktop crate has no Rust unit tests (`test = false`) because Windows test executables lack the
-  Common Controls manifest Tauri needs; its logic is thin wiring covered through the core crates.
+- The desktop crate keeps `test = false` by default because Windows test executables lack the Common Controls
+  manifest Tauri needs. Linux CI explicitly runs its event/history wiring tests with `cargo test -p parlance-desktop --lib`.
 
 ## Adaptive window and contextual copilot — 2026-11-25
 
@@ -106,7 +106,8 @@ Last updated: 2026-11-25.
 - Native macOS checks exercised saved-profile restart, attribution after editing, written replies with audio off, live system capture/translation alongside a manual query, and pinned reading while capture continued.
 - The 2B model gave one imprecise general cache-aside explanation and initially confused an undocumented TTL with an absent setting. Prompt wording was tightened and the subsequent native result acknowledged that the TTL was unknown; general technical correctness is not guaranteed by these checks.
 
-Implementation and review remain uncommitted by user request. See [ADR 0012](adr/0012-contextual-copilot-and-adaptive-window.md) and the linked evidence for validation scope.
+The implementation was subsequently integrated in [PR #10](https://github.com/FrandyAquino/jav-parlance/pull/10).
+See [ADR 0012](adr/0012-contextual-copilot-and-adaptive-window.md) and the dated evidence for the scope of its original validation.
 
 ## Spanish audio and repeated translation correction — 2026-11-25
 

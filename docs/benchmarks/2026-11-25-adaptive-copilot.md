@@ -1,8 +1,11 @@
 # Adaptive window and contextual copilot — 2026-11-25
 
-Local, uncommitted implementation on top of `6b9bf7a1ea9127fad668c4a1d3c5ef353764e13e`.
-This record distinguishes automated contracts, native macOS interaction and model-backed replay measurements.
-No commit, push, PR or remote CI run was created for this change.
+Historical record of the local implementation tested on 2026-11-25, on top of
+`6b9bf7a1ea9127fad668c4a1d3c5ef353764e13e`. It distinguishes automated contracts,
+native macOS interaction and model-backed replay measurements. No commit, push, PR
+or remote CI run was created during that validation session. The implementation
+was later integrated in [PR #10](https://github.com/FrandyAquino/jav-parlance/pull/10);
+the measurements below still refer to the original session, not subsequent changes.
 
 ## Environment
 

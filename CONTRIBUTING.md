@@ -74,6 +74,7 @@ Every PR, including PRs from forks, runs:
 
 - Rust formatting, Clippy, tests, and generated-contract checks on Linux, macOS,
   and Windows.
+- Explicit Linux tests of the desktop event/history wiring without launching a webview.
 - Type checking, lint, tests, and builds for the desktop frontend and extension.
 - Installer builds for Linux, macOS, and Windows after the checks pass.
 - `CI required`, which succeeds only if all those jobs succeed.
@@ -90,11 +91,9 @@ In GitHub **Settings → Rules → Rulesets** (or branch protection), protect `m
 - Require successful checks from GitHub Actions and an up-to-date branch.
 - Block force pushes and branch deletion.
 
-Until the workflow containing `CI required` has run and is merged, use the existing
-checks: `Frontend`, `Rust (ubuntu-latest)`, `Rust (macos-latest)`, and
-`Rust (windows-latest)`. Then replace those required checks with `CI required`, so
-installer failures also block merging. Do not require a check that does not yet
-exist on the target branch. If using a merge queue later, add the `merge_group`
+Use **`CI required`** from GitHub Actions as the required check: it includes the Rust,
+frontend, and installer results. When configuring a new fork, run the workflow first
+so GitHub can discover that check. If using a merge queue later, add the `merge_group`
 workflow trigger before enabling it.
 
 Keep PR workflows on GitHub-hosted runners, with read-only token permissions and

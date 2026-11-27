@@ -1,11 +1,11 @@
-<p align="center">
-  <img src="apps/desktop/src-tauri/icons/128x128@2x.png" width="96" height="96" alt="Parlance: original speech and translation side by side">
-</p>
-
 <h1 align="center">Parlance</h1>
 
 <p align="center"><strong>Your meetings. Your machine.</strong></p>
 <p align="center">An open-source, local AI meeting assistant for live transcription,<br>real-time translation, and reply suggestions.</p>
+
+<p align="center">
+  <img src="docs/assets/parlance-cover.png" width="1280" alt="Parlance: stay in the conversation, in your language. An illustrative English-to-Spanish example of local captions and translation.">
+</p>
 
 <p align="center">
   <a href="https://github.com/FrandyAquino/jav-parlance/actions/workflows/ci.yml"><img src="https://github.com/FrandyAquino/jav-parlance/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status on main"></a>
@@ -29,6 +29,14 @@ copilot drafts a reply for you to review.
 
 **No account, subscription, or paid API key.** Download the models once, then run
 speech recognition and language inference on your own hardware.
+
+## Find your flow
+
+| When you need to… | Use Parlance to… |
+| --- | --- |
+| Follow a meeting in another language | Read live captions with the original and translation together. |
+| Prepare a technical answer | Ask a written question and add a local profile describing your project. |
+| Keep your reply in view | Pin a bilingual draft while the conversation continues. |
 
 ## What you can do
 
@@ -61,6 +69,10 @@ service. Respect participants' consent and your organization's meeting policies.
 **Parlance is in early development. There are no published releases yet.** The
 supported starting point is a source build. CI produces development installers;
 these are not a signed, notarized release channel.
+
+**Choose a starting point:** [build from source](#develop), try a
+[development installer](#development-installers), or read the
+[contribution guide](CONTRIBUTING.md) before making a change.
 
 ### Develop
 
@@ -125,6 +137,28 @@ Evidence: [Windows](docs/benchmarks/2026-11-24-windows-baseline.md) ·
 [macOS](docs/benchmarks/2026-11-25-macos.md) ·
 [Contextual copilot](docs/benchmarks/2026-11-25-adaptive-copilot.md) ·
 [Browser extension setup](apps/extension/README.md).
+
+## Common questions
+
+**Can I use it with Zoom, Microsoft Teams, or Google Meet?**
+System-audio capture can listen to the meeting application's output without adding
+a bot to the call. This is OS-level audio capture; individual app/platform
+combinations have not all been verified. Per-application and browser-tab capture
+have the limits listed above.
+
+**Does it work offline?**
+Speech recognition, translation, and reply generation run locally after you download
+the selected models and runtime. Additional model downloads still need internet access.
+
+**Do I need a GPU?**
+CPU paths are available, and supported GPUs can accelerate inference. Speed and
+memory use depend on your models and hardware; there is no universally verified
+minimum-RAM or latency guarantee. Start with the default models and check your
+[platform guide](#develop).
+
+**Can I ask questions without recording a meeting?**
+Yes. Open the expanded copilot, select **Ask a question**, and enter your question.
+A project profile and draft idea are optional. This does not start audio capture.
 
 ## Privacy and local models
 

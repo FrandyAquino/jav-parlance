@@ -1,7 +1,8 @@
 # Linux
 
-Status: **compiles for `x86_64-unknown-linux-gnu`, never run.** Treat everything below as design intent until it
-has been exercised on a real desktop.
+Status: **Linux builds and isolated lifecycle tests exist; real desktop audio acceptance is pending.**
+The lifecycle tests use a synthetic `parec` child to verify reconnection and cleanup. They do not establish
+capture behavior on a real PulseAudio or PipeWire desktop, or compatibility across CPU baselines.
 
 ## Adapter design (`crates/capture/src/linux`)
 
@@ -48,7 +49,8 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librs
 - The UI sets `data-effects="none"` on Linux: compositors give the webview no backdrop blur, so surfaces are opaque.
 - Paths follow XDG via `directories`: models in `~/.local/share/parlance/models`, settings in
   `~/.config/parlance/settings.json`, bridge discovery in `~/.local/share/parlance/bridge.json` (mode `0600`).
-- `llama-server` has no parent-death hook on Linux; if the app is killed, the child may survive.
+- `llama-server` uses the Unix lifetime-pipe guardian: closing the owner's pipe, including after a crash,
+  terminates the sidecar. Synthetic process tests cover this mechanism; real Linux desktop acceptance remains pending.
 
 ## Verification checklist (not done yet)
 
