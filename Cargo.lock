@@ -2884,7 +2884,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "cc",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "parlance-audio",
  "parlance-domain",
  "parlance-protocol",
@@ -2982,7 +2982,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "hex",
  "reqwest 0.12.28",
  "serde",
