@@ -89,7 +89,8 @@ impl WhisperRecognizer {
             let seconds = samples as f32 / TARGET_SAMPLE_RATE as f32;
             let ctx = ((seconds * AUDIO_CTX_PER_SECOND) as i32 + 128).min(FULL_AUDIO_CTX);
             params.set_audio_ctx(ctx);
-            params.set_temperature_inc(0.0);
+            // Keep whisper.cpp's temperature fallback: a failed greedy decode
+            // can otherwise return a repetition loop on music instead of retrying.
         }
         params
     }

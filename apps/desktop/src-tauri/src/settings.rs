@@ -26,13 +26,14 @@ impl SettingsRepository {
     }
 
     pub fn replace(&self, settings: AppSettings) -> std::io::Result<()> {
+        let mut current = self.current.write().unwrap_or_else(|p| p.into_inner());
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let temp = self.path.with_extension("json.tmp");
         std::fs::write(&temp, serde_json::to_vec_pretty(&settings)?)?;
         std::fs::rename(&temp, &self.path)?;
-        *self.current.write().unwrap_or_else(|p| p.into_inner()) = settings;
+        *current = settings;
         Ok(())
     }
 }

@@ -98,3 +98,19 @@ cargo bench -p parlance-audio --bench dsp
 - Pipeline tests use `#[tokio::test(flavor = "multi_thread")]` and poll with a bounded wait instead of fixed sleeps
   where possible.
 - Anything needing models or hardware must skip cleanly when they are missing.
+
+## macOS acceptance
+
+Run `cargo run -p parlance-capture --example capture_probe` to enumerate sources without requesting recording.
+Pass `system:default`, an `app:<pid>` or `mic:default` and a duration to measure real PCM without saving audio.
+Play a fixture through a different process; nonzero samples and zero drops demonstrate capture only. Use
+`parlance-cli listen`, `bench` and `llm` separately to verify recognition and translation. Real-model tests
+resolve the same platform data directory as the application, or `PARLANCE_MODELS_DIR` when supplied.
+
+`cargo test -p parlance-llm` includes Unix subprocess stop/drop and owner-SIGKILL cases. These verify the
+lifetime pipe on the current Unix host, not Windows Job Objects or power-loss behavior. History completion
+is tested by joining its writer and reopening SQLite; packaged quit acceptance is a separate check.
+
+Build an installer using `pnpm build`, or use the universal command in `docs/platform/macos.md`. The release
+profile deliberately avoids Rust's stripping pass because macOS 27 rejects misaligned Mach-O LINKEDIT
+sections produced by affected Rust/LLVM versions (rust-lang/rust#157750).

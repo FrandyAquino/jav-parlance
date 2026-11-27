@@ -5,6 +5,9 @@
 import { Channel, type InvokeArgs, invoke } from "@tauri-apps/api/core";
 import type { AppInfo } from "@/bindings/AppInfo";
 import type { AppSettings } from "@/bindings/AppSettings";
+import type { AskCopilotRequest } from "@/bindings/AskCopilotRequest";
+import type { ProjectProfiles } from "@/bindings/ProjectProfiles";
+import type { SaveProjectProfileRequest } from "@/bindings/SaveProjectProfileRequest";
 import type { HistoryEntry } from "@/bindings/HistoryEntry";
 import type { HistoryLine } from "@/bindings/HistoryLine";
 import type { IpcError } from "@/bindings/IpcError";
@@ -55,4 +58,11 @@ export const ipc = {
   listHistory: () => invoke<HistoryEntry[]>("list_history"),
   historyTranscript: (id: number) => invoke<HistoryLine[]>("history_transcript", { id }),
   deleteHistory: (id: number) => command("delete_history", { id }),
+  listProjectProfiles: () => invoke<ProjectProfiles>("list_project_profiles"),
+  saveProjectProfile: (request: SaveProjectProfileRequest) =>
+    invoke<ProjectProfiles>("save_project_profile", { request }),
+  deleteProjectProfile: (id: string) => invoke<ProjectProfiles>("delete_project_profile", { id }),
+  setActiveProjectProfile: (id: string | null) => invoke<ProjectProfiles>("set_active_project_profile", { id }),
+  askCopilot: (request: AskCopilotRequest) => command("ask_copilot", { request }),
+  cancelCopilot: (requestId: string) => command("cancel_copilot", { requestId }),
 };

@@ -37,7 +37,7 @@ Dark is the default when no theme attribute is present.
 
 ## Typography
 
-- Sans: Segoe UI Variable Text → Segoe UI → system (SF Pro) → Inter → Noto Sans. Mono: Cascadia Mono → SF Mono →
+- Sans: bundled Google Sans Flex → Segoe UI Variable Text → system (SF Pro) → Noto Sans. Mono: Cascadia Mono → SF Mono →
   JetBrains Mono.
 - Scale (px, via arbitrary Tailwind values): 10 (group labels, hover timestamps), 11 (column headings, metadata),
   12 (controls, hints, toasts), 13 (buttons, dialog body), 14 with `leading-relaxed` (transcript, replies).
@@ -63,7 +63,9 @@ Dark is the default when no theme attribute is present.
 | `SourcePicker` | `SourcePicker.tsx` | Primary source (grouped) + optional microphone; refreshes on pointer down |
 | `LevelMeter` | `LevelMeter.tsx` | `role="meter"`, −60…0 dB, RMS bar + peak tick |
 | `TranscriptView` | `TranscriptView.tsx` | One scroll container, one grid row per segment (original + translation stay aligned); stick-to-bottom with "Live" pill |
-| `CopilotPanel` | `CopilotPanel.tsx` | Latest suggestion: question, "Say it" and "Meaning" columns, copy buttons |
+| `CopilotPanel` | `CopilotPanel.tsx` | Live/manual question selection, editable idea and output language, response status, context attribution, copy and pin |
+| `ProjectProfiles` | `ProjectProfiles.tsx` | Local project selection and accessible create/edit/delete dialog |
+| `PinnedReply` | `PinnedReply.tsx` | Frozen chosen answer with larger reading text and explicit return controls |
 | `Notices` | `Notices.tsx` | Bottom-right toasts; info/warning auto-dismiss after 6 s, errors stay |
 | `EmptyState` | `EmptyState.tsx` | First-run model download, then "pick a source" |
 | `SettingsDialog` | `SettingsDialog.tsx` | Radix Dialog: Languages, Assistant, Models, Privacy (history), Appearance |
@@ -81,11 +83,13 @@ Dark is the default when no theme attribute is present.
 
 | Keys | Action |
 | --- | --- |
-| `mod+Enter` | Start / stop listening |
+| `mod+Enter` | Start / stop listening outside editable fields; submit from either composer field |
 | `mod+P` | Pause / resume |
 | `mod+,` | Open settings |
-| `mod+J` | Toggle copilot panel |
+| `mod+J` | Toggle compact subtitles / expanded preparation |
 | `mod+T` | Toggle always on top |
+
+Capture and pause shortcuts ignore editable fields. Modes retain transcript scroll/follow state and manual work. A completed answer can be pinned for reading; later live suggestions cannot change it. Native sizes are remembered per mode during the run, without persistent geometry storage.
 
 ## Accessibility
 

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,6 +20,7 @@ env:
 jobs:
   rust:
     name: Rust (${{ matrix.os }})
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,9 @@ jobs:
     steps:
       # Keep LF endings so regenerated bindings compare cleanly on Windows.
       - run: git config --global core.autocrlf input
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -60,10 +64,10 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       # cargo test regenerates the ts-rs contracts; committed bindings must match.
       - name: Check generated bindings
@@ -80,13 +84,16 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Version comes from the root package.json `packageManager` field.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -108,3 +115,75 @@ jobs:
           pnpm lint
           pnpm test
           pnpm build
+
+  bundles:
+    name: Installer (${{ matrix.os }})
+    needs: [rust, frontend]
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libclang-dev cmake patchelf
+      - name: Point bindgen at LLVM
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - name: Build universal Mac installer
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          pnpm -C apps/desktop tauri build --target universal-apple-darwin
+      - name: Build Windows or Linux installer
+        if: runner.os != 'macOS'
+        run: pnpm build
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: parlance-${{ runner.os }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.AppImage
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  required:
+    # Stable name for branch protection; skipped/cancelled dependencies must fail.
+    name: CI required
+    if: ${{ always() }}
+    needs: [rust, frontend, bundles]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BUNDLES_RESULT: ${{ needs.bundles.result }}
+        run: |
+          for result in "$RUST_RESULT" "$FRONTEND_RESULT" "$BUNDLES_RESULT"; do
+            if [ "$result" != success ]; then
+              echo "::error::A required CI job failed, was cancelled, or was skipped."
+              exit 1
+            fi
+          done

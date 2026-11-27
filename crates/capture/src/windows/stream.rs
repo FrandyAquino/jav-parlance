@@ -207,7 +207,7 @@ fn drain_packets(
         bytes.resize(frames as usize * block_align, 0);
         let (read, _info) = capture.read_from_device(bytes)?;
         let valid = &bytes[..read as usize * block_align];
-        samples.extend(valid.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])));
+        samples.extend(valid.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)));
         total += read as usize;
     }
     Ok(total)

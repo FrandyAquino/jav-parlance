@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ask-copilot"
+description = "Enables the ask_copilot command without any pre-configured scope."
+commands.allow = ["ask_copilot"]
+
+[[permission]]
+identifier = "deny-ask-copilot"
+description = "Denies the ask_copilot command without any pre-configured scope."
+commands.deny = ["ask_copilot"]

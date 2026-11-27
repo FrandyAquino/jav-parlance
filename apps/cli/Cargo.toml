@@ -9,6 +9,9 @@ license.workspace = true
 name = "parlance-cli"
 path = "src/main.rs"
 
+[features]
+metal = ["parlance-asr/metal"]
+
 [dependencies]
 parlance-domain.workspace = true
 parlance-protocol.workspace = true
@@ -26,7 +29,11 @@ tokio.workspace = true
 tokio-util.workspace = true
 reqwest.workspace = true
 tracing-subscriber.workspace = true
-sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+parlance-copilot.workspace = true
+serde_json.workspace = true

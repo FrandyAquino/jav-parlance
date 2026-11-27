@@ -74,7 +74,7 @@ pub async fn run(args: BenchArgs) -> anyhow::Result<()> {
         }
     });
 
-    let mut system = System::new();
+    let mut system = System::new().context("initialize process metrics")?;
     let pid = Pid::from_u32(std::process::id());
     let (mut peak_rss, mut cpu_samples) = (0u64, Vec::new());
 

@@ -13,6 +13,12 @@
     "core:window:allow-close",
     "core:window:allow-toggle-maximize",
     "core:window:allow-is-always-on-top",
+    "core:window:allow-inner-size",
+    "core:window:allow-scale-factor",
+    "core:window:allow-current-monitor",
+    "core:window:allow-set-size",
+    "core:window:allow-outer-position",
+    "core:window:allow-set-position",
     "allow-app-info",
     "allow-list-sources",
     "allow-get-settings",
@@ -28,6 +34,12 @@
     "allow-resume-session",
     "allow-list-history",
     "allow-history-transcript",
-    "allow-delete-history"
+    "allow-delete-history",
+    "allow-list-project-profiles",
+    "allow-save-project-profile",
+    "allow-delete-project-profile",
+    "allow-set-active-project-profile",
+    "allow-ask-copilot",
+    "allow-cancel-copilot"
   ]
 }

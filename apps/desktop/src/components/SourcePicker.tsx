@@ -26,9 +26,7 @@ export function SourcePicker({ disabled }: { disabled: boolean }) {
   const selectMicrophone = useApp((s) => s.selectMicrophone);
   const refresh = useApp((s) => s.refreshSources);
 
-  const primary: SelectOption[] = sources
-    .filter((s) => s.kind.type !== "microphone")
-    .map((s) => ({ value: s.id, label: s.name, group: groupOf(s) }));
+  const primary: SelectOption[] = sources.map((s) => ({ value: s.id, label: s.name, group: groupOf(s) }));
   const microphones: SelectOption[] = [
     { value: NO_MICROPHONE, label: "No mic" },
     ...sources.filter((s) => s.kind.type === "microphone").map((s) => ({ value: s.id, label: s.name })),
@@ -48,20 +46,24 @@ export function SourcePicker({ disabled }: { disabled: boolean }) {
         icon={
           selectedKind === "application" ? (
             <AppWindow className="size-3.5 shrink-0" aria-hidden />
+          ) : selectedKind === "microphone" ? (
+            <Mic className="size-3.5 shrink-0" aria-hidden />
           ) : (
             <MonitorSpeaker className="size-3.5 shrink-0" aria-hidden />
           )
         }
       />
-      <Select
-        label="Include microphone"
-        value={microphone ?? NO_MICROPHONE}
-        options={microphones}
-        onChange={(value) => selectMicrophone(value === NO_MICROPHONE ? null : value)}
-        disabled={disabled}
-        className={microphone ? "max-w-32 text-ink" : "max-w-32"}
-        icon={<Mic className="size-3.5 shrink-0" aria-hidden />}
-      />
+      {selectedKind !== "microphone" && (
+        <Select
+          label="Include microphone"
+          value={microphone ?? NO_MICROPHONE}
+          options={microphones}
+          onChange={(value) => selectMicrophone(value === NO_MICROPHONE ? null : value)}
+          disabled={disabled}
+          className={microphone ? "max-w-32 text-ink" : "max-w-32"}
+          icon={<Mic className="size-3.5 shrink-0" aria-hidden />}
+        />
+      )}
     </div>
   );
 }

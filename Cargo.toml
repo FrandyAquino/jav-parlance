@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-repository = "https://github.com/parlance-app/parlance"
+repository = "https://github.com/FrandyAquino/jav-parlance"
 
 [workspace.dependencies]
 parlance-domain = { path = "crates/domain" }
@@ -30,7 +30,7 @@ rtrb = "0.4"
 rubato = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 hex = "0.4"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util", "fs", "net"] }
@@ -39,7 +39,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12", features = ["serde-compat"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 directories = "6"
 whisper-rs = "0.16"
 wasapi = "0.27"
@@ -59,7 +59,9 @@ opt-level = 2
 [profile.release]
 lto = "thin"
 codegen-units = 1
-strip = "debuginfo"
+# Rust's Mach-O stripping can misalign LINKEDIT and break proc-macro loading on
+# macOS 27 (rust-lang/rust#157750). Release debuginfo is already disabled.
+strip = "none"
 
 # whisper-rs-sys 0.15.0 does not build with MinGW; see third_party/whisper-rs-sys/PATCHES.md.
 [patch.crates-io]

@@ -4,5 +4,7 @@
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [env]
+# Match the oldest supported official macOS llama-server binary.
+MACOSX_DEPLOYMENT_TARGET = "13.3"
 # `cargo test` regenerates the TypeScript contracts consumed by the UI.
 TS_RS_EXPORT_DIR = { value = "apps/desktop/src/bindings", relative = true }

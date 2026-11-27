@@ -8,6 +8,8 @@ mod composite;
 mod error;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 pub mod replay;
 #[cfg(windows)]
 mod windows;
@@ -77,7 +79,11 @@ pub fn platform_backend() -> Result<Arc<dyn CaptureBackend>, CaptureError> {
     {
         Ok(Arc::new(linux::PulseBackend))
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Arc::new(macos::MacosBackend))
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Err(CaptureError::Unsupported(format!("no native capture adapter for {} yet", std::env::consts::OS)))
     }

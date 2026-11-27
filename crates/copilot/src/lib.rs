@@ -7,7 +7,10 @@
 mod context;
 mod detector;
 mod policy;
+mod prompt;
+mod service;
 mod worker;
+pub use service::{ActiveProfile, CopilotError, CopilotPreferences, CopilotService};
 
 pub use context::ConversationContext;
 pub use detector::is_question;

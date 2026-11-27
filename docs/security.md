@@ -11,6 +11,7 @@
 4. **Least privilege IPC.** The webview can call only the commands listed in `src-tauri/build.rs` and granted in
    `capabilities/default.json`, plus a few window-chrome permissions. CSP disallows remote scripts and
    connections. Raw audio never crosses into the renderer.
+5. **Project context is explicit local storage.** Named profiles and their active selection live in `<config dir>/parlance/profiles.json`, independently of history. Deleting a profile clears its selection; already generated replies retain their attribution in memory. Questions, ideas and replies are not added to this file.
 
 ## Threats and mitigations
 
@@ -23,6 +24,8 @@
 | Malicious local client injecting audio into the bridge | Bridge listens on loopback only and requires a random token from a user-private discovery file; constant-time comparison; 1 MiB frame cap; strictly typed frames | `crates/capture/src/bridge.rs` |
 | Web pages reaching the native host | Host manifest allow-lists only the extension id; the extension requests no host permissions or content scripts | `apps/native-host`, `apps/extension/public/manifest.json` |
 | Crash or partial write corrupting settings/history | Settings written to a temp file then renamed; SQLite in WAL mode with schema migrations | `src-tauri/src/settings.rs`, `crates/storage` |
+| Project text injecting instructions or silently losing facts | Profile/question/idea blocks escape delimiters and are declared data; over-budget mandatory text is rejected, not truncated; omitted recent conversation is indicated | `crates/copilot/src/prompt.rs` |
+| Profile save failure overwriting the visible state | Serialized mutations replace a synced temporary file before publishing state; unreadable original files are preserved | `crates/storage/src/profiles.rs` |
 | Capture glitches affecting other apps | Capture threads never block; overflow drops and counts samples | `crates/audio/src/ring.rs` |
 
 ## Rules for contributors

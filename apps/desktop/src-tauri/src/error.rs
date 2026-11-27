@@ -1,6 +1,7 @@
 //! Maps internal errors onto the stable `IpcError` contract.
 
 use parlance_capture::CaptureError;
+use parlance_copilot::CopilotError;
 use parlance_models::DownloadError;
 use parlance_protocol::{ErrorCode, IpcError};
 use parlance_session::SessionError;
@@ -31,11 +32,36 @@ pub fn from_download(error: DownloadError) -> IpcError {
         DownloadError::Network(_) => ErrorCode::Network,
         DownloadError::ChecksumMismatch { .. } | DownloadError::SizeMismatch { .. } => ErrorCode::ModelCorrupt,
         DownloadError::Io(_) | DownloadError::Extract(_) => ErrorCode::Storage,
-        DownloadError::Cancelled => ErrorCode::InvalidRequest,
+        DownloadError::Cancelled => ErrorCode::Cancelled,
     };
     IpcError::new(code, error.to_string())
 }
 
 pub fn invalid(message: impl Into<String>) -> IpcError {
     IpcError::new(ErrorCode::InvalidRequest, message)
+}
+
+pub fn storage(message: impl Into<String>) -> IpcError {
+    IpcError::new(ErrorCode::Storage, message)
+}
+
+pub fn from_profile(error: parlance_storage::ProfileError) -> IpcError {
+    let code = match error {
+        parlance_storage::ProfileError::InvalidRequest(_) | parlance_storage::ProfileError::NotFound => {
+            ErrorCode::InvalidRequest
+        }
+        parlance_storage::ProfileError::InvalidFile | parlance_storage::ProfileError::Io(_) => ErrorCode::Storage,
+    };
+    IpcError::new(code, error.to_string())
+}
+
+pub fn from_intelligence(error: crate::intelligence::IntelligenceError) -> IpcError {
+    use crate::intelligence::IntelligenceError;
+    let code = match &error {
+        IntelligenceError::ModelMissing => ErrorCode::ModelMissing,
+        IntelligenceError::Closed | IntelligenceError::Copilot(CopilotError::Closed) => ErrorCode::InvalidState,
+        IntelligenceError::Copilot(CopilotError::ContextTooLarge) => ErrorCode::ContextTooLarge,
+        IntelligenceError::Copilot(CopilotError::InvalidRequest(_)) => ErrorCode::InvalidRequest,
+    };
+    IpcError::new(code, error.to_string())
 }

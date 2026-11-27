@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "Google Sans Flex";
+  src: url("./assets/fonts/google-sans-flex.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 1000;
+  font-display: swap;
+}
+
 /*
  * Design tokens. Surfaces are translucent only where the OS supplies a
  * native backdrop (Mica/Acrylic on Windows, vibrancy on macOS); elsewhere
@@ -7,7 +15,8 @@
  * cannot blur what lies behind the window by itself.
  */
 @theme {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+  --font-sans:
+    "Google Sans Flex", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
     "Noto Sans", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "SF Mono", "JetBrains Mono", ui-monospace, monospace;
 
@@ -93,6 +102,7 @@ body,
 
 body {
   font-family: var(--font-sans);
+  font-optical-sizing: auto;
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
   user-select: none;
@@ -153,6 +163,21 @@ body {
 
 .selectable {
   user-select: text;
+}
+
+.input-field {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.input-field::placeholder {
+  color: var(--ink-faint);
 }
 
 :focus-visible {

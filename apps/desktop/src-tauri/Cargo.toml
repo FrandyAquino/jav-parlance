@@ -17,6 +17,7 @@ doctest = false
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+async-trait.workspace = true
 parlance-domain.workspace = true
 parlance-protocol.workspace = true
 parlance-audio.workspace = true

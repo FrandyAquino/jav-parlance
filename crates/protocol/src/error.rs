@@ -6,7 +6,9 @@ use ts_rs::TS;
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum ErrorCode {
+    Cancelled,
     InvalidRequest,
+    ContextTooLarge,
     InvalidState,
     ModelMissing,
     ModelCorrupt,

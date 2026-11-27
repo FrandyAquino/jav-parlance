@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
+#[cfg(not(unix))]
+use tokio::process::Command;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
@@ -15,6 +17,8 @@ const HEALTH_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// Consecutive GPU start failures before retrying on CPU only.
 const GPU_ATTEMPTS: u32 = 2;
+/// Shader warm-up must not keep shutdown waiting on an unresponsive server.
+const WARMUP_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
@@ -127,6 +131,12 @@ impl LlamaServer {
     pub fn shutdown(&self) {
         self.shutdown.cancel();
     }
+
+    pub async fn shutdown_and_wait(&self) {
+        self.shutdown();
+        let mut status = self.subscribe();
+        let _ = status.wait_for(|s| *s == ServerStatus::Stopped).await;
+    }
 }
 
 impl Drop for LlamaServer {
@@ -190,7 +200,7 @@ async fn run_once(
         Err(e) => return RunOutcome::FailedToStart(format!("cannot launch {}: {e}", config.executable.display())),
     };
     #[cfg(windows)]
-    let _job = child.raw_handle().and_then(|handle| {
+    let _job = child.process.raw_handle().and_then(|handle| {
         crate::job::KillOnClose::assign(handle).map_err(|e| tracing::warn!(%e, "cannot attach job object")).ok()
     });
 
@@ -210,7 +220,13 @@ async fn run_once(
         }
     }
 
-    warm_up(http, &endpoint).await;
+    tokio::select! {
+        _ = shutdown.cancelled() => {
+            let _ = child.kill().await;
+            return RunOutcome::Shutdown;
+        }
+        _ = tokio::time::timeout(WARMUP_TIMEOUT, warm_up(http, &endpoint)) => {}
+    }
     tracing::info!(url = %endpoint.base_url, gpu_layers, "llama-server ready");
     let _ = status.send(ServerStatus::Ready { endpoint, gpu: gpu_layers > 0 });
     tokio::select! {
@@ -222,14 +238,44 @@ async fn run_once(
     }
 }
 
-fn spawn_child(config: &ServerConfig, port: u16, api_key: &str, gpu_layers: u32) -> std::io::Result<Child> {
+struct ServerChild {
+    process: Child,
+    // Child::wait closes stdin. Keep the lifetime writer separate so merely
+    // waiting for a crash does not signal the Unix guardian to stop.
+    #[cfg(unix)]
+    lifetime: Option<tokio::process::ChildStdin>,
+}
+
+impl ServerChild {
+    async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.process.wait().await
+    }
+
+    async fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.lifetime.take();
+            self.process.wait().await.map(|_| ())
+        }
+        #[cfg(not(unix))]
+        self.process.kill().await
+    }
+}
+
+fn spawn_child(config: &ServerConfig, port: u16, api_key: &str, gpu_layers: u32) -> std::io::Result<ServerChild> {
+    #[cfg(unix)]
+    let mut command = crate::unix::command(&config.executable)?;
+    #[cfg(not(unix))]
     let mut command = Command::new(&config.executable);
     command
         .args(config.args(port, api_key, gpu_layers))
-        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    command.stdin(Stdio::piped());
+    #[cfg(not(unix))]
+    command.stdin(Stdio::null());
     if let Some(dir) = config.executable.parent() {
         // Backend DLLs (ggml-vulkan, ggml-cpu-*) are loaded from beside the binary.
         command.current_dir(dir);
@@ -240,9 +286,15 @@ fn spawn_child(config: &ServerConfig, port: u16, api_key: &str, gpu_layers: u32)
         command.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = command.spawn()?;
+    #[cfg(unix)]
+    let lifetime = child.stdin.take().ok_or_else(|| std::io::Error::other("missing sidecar lifetime pipe"))?;
     forward_logs(child.stdout.take());
     forward_logs(child.stderr.take());
-    Ok(child)
+    Ok(ServerChild {
+        process: child,
+        #[cfg(unix)]
+        lifetime: Some(lifetime),
+    })
 }
 
 fn forward_logs(stream: Option<impl tokio::io::AsyncRead + Unpin + Send + 'static>) {
@@ -326,5 +378,109 @@ mod tests {
         assert!(matches!(restarting, ServerStatus::Restarting { reason } if reason.contains("cannot launch")));
         server.shutdown();
         status.wait_for(|s| *s == ServerStatus::Stopped).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    mod unix_lifetime {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt;
+        use std::path::Path;
+
+        struct Fixture(PathBuf);
+
+        impl Fixture {
+            fn new() -> Self {
+                let dir = std::env::temp_dir().join(format!("parlance-sidecar-{}", random_key()));
+                std::fs::create_dir(&dir).unwrap();
+                let executable = dir.join("runtime 'with spaces");
+                std::fs::write(&executable, "#!/bin/sh\nprintf '%s' \"$$\" > \"$0.pid\"\nexec sleep 60\n").unwrap();
+                std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+                Self(executable)
+            }
+
+            fn config(&self) -> ServerConfig {
+                ServerConfig::new(self.0.clone(), "model with spaces.gguf".into())
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+            }
+        }
+
+        async fn pid(executable: &Path) -> String {
+            let path = PathBuf::from(format!("{}.pid", executable.display()));
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(pid) = std::fs::read_to_string(&path)
+                        && !pid.is_empty()
+                    {
+                        return pid;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("fake runtime did not start")
+        }
+
+        async fn assert_exited(pid: &str) {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let output =
+                        tokio::process::Command::new("ps").args(["-p", pid, "-o", "stat="]).output().await.unwrap();
+                    let state = String::from_utf8_lossy(&output.stdout);
+                    if !output.status.success() || state.trim().starts_with('Z') {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("sidecar survived its owner");
+        }
+
+        #[tokio::test]
+        async fn stop_and_drop_terminate_the_real_runtime() {
+            for explicit_stop in [true, false] {
+                let fixture = Fixture::new();
+                let mut child = spawn_child(&fixture.config(), 1234, "test", 0).unwrap();
+                let pid = pid(&fixture.0).await;
+                // Waiting must keep the lifetime pipe open.
+                assert!(tokio::time::timeout(Duration::from_millis(50), child.wait()).await.is_err());
+                if explicit_stop {
+                    child.kill().await.unwrap();
+                }
+                drop(child);
+                assert_exited(&pid).await;
+            }
+        }
+
+        #[tokio::test]
+        async fn owner_sigkill_terminates_the_real_runtime() {
+            let fixture = Fixture::new();
+            let result = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "server::tests::unix_lifetime::crashing_owner_helper", "--ignored"])
+                .env("PARLANCE_CRASH_TEST_EXECUTABLE", &fixture.0)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .unwrap();
+            assert!(!result.success());
+            assert_exited(&pid(&fixture.0).await).await;
+        }
+
+        #[tokio::test]
+        #[ignore = "subprocess helper for owner_sigkill_terminates_the_real_runtime"]
+        async fn crashing_owner_helper() {
+            let Some(executable) = std::env::var_os("PARLANCE_CRASH_TEST_EXECUTABLE") else { return };
+            let config = ServerConfig::new(executable.into(), "m.gguf".into());
+            let _child = spawn_child(&config, 1234, "test", 0).unwrap();
+            let _ = pid(&config.executable).await;
+            let _ = std::process::Command::new("/bin/kill").args(["-KILL", &std::process::id().to_string()]).status();
+            panic!("failed to kill the test owner");
+        }
     }
 }

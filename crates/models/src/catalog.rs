@@ -163,6 +163,51 @@ const RUNTIME: CatalogEntry = CatalogEntry {
     archive: Some(Archive::TarGz),
 };
 
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const RUNTIME: CatalogEntry = CatalogEntry {
+    id: "llama-server",
+    kind: ModelKind::Runtime,
+    name: "llama.cpp server b12686 (Intel Mac)",
+    description: "Local LLM runtime for Intel Macs.",
+    license: "MIT",
+    file_name: "llama-b12686-bin-macos-x64.tar.gz",
+    url: llama_release_url!("llama-b12686-bin-macos-x64.tar.gz"),
+    sha256: "80683324dbc5f6dc88f898fcda0066311ae75724e62e856b768c1f55a3b12d03",
+    size_bytes: 12_538_857,
+    is_default: true,
+    archive: Some(Archive::TarGz),
+};
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const RUNTIME: CatalogEntry = CatalogEntry {
+    id: "llama-server",
+    kind: ModelKind::Runtime,
+    name: "llama.cpp server b12686 (ARM64 CPU)",
+    description: "Local LLM runtime for ARM64 Linux.",
+    license: "MIT",
+    file_name: "llama-b12686-bin-ubuntu-arm64.tar.gz",
+    url: llama_release_url!("llama-b12686-bin-ubuntu-arm64.tar.gz"),
+    sha256: "414a9148bdc6fff0a9689c33a489e5854858ec6dcceae5c08de5abb324d0f862",
+    size_bytes: 18_928_872,
+    is_default: true,
+    archive: Some(Archive::TarGz),
+};
+
+#[cfg(all(windows, target_arch = "aarch64"))]
+const RUNTIME: CatalogEntry = CatalogEntry {
+    id: "llama-server",
+    kind: ModelKind::Runtime,
+    name: "llama.cpp server b12686 (ARM64 CPU)",
+    description: "Local LLM runtime for ARM64 Windows.",
+    license: "MIT",
+    file_name: "llama-b12686-bin-win-cpu-arm64.zip",
+    url: llama_release_url!("llama-b12686-bin-win-cpu-arm64.zip"),
+    sha256: "2ca96d0dfb0cc7c4f3c21df8552c7028a840c49403038c9b12276e38fc8bce6e",
+    size_bytes: 13_284_194,
+    is_default: true,
+    archive: Some(Archive::Zip),
+};
+
 pub fn catalog() -> &'static [CatalogEntry] {
     MODELS
 }

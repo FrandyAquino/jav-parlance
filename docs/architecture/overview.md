@@ -9,12 +9,12 @@ device. The only network traffic is the model downloads the user starts.
 flowchart LR
   user([User]) --> ui[React UI<br/>WebView]
   ui <-- "Tauri commands +<br/>SessionEvent channel" --> core[Rust core<br/>parlance-desktop]
-  os[(OS audio<br/>WASAPI · PulseAudio protocol)] --> core
+  os[(OS audio<br/>WASAPI · Core Audio/SCK · PulseAudio)] --> core
   browser[Chromium + extension] -- native messaging --> host[parlance-native-host]
   host -- "TCP 127.0.0.1 + token" --> core
   core -- "child process, HTTP 127.0.0.1 + API key" --> llama[llama-server sidecar]
   core -- "HTTPS, user-initiated" --> hf[(Hugging Face / GitHub releases)]
-  core --> disk[(settings.json · models/ · history.db opt-in)]
+  core --> disk[(settings.json · profiles.json · models/ · history.db opt-in)]
 ```
 
 - Raw audio never crosses into the webview. The UI receives only typed events (ADR 0001).
@@ -27,13 +27,13 @@ flowchart LR
 | `crates/domain` | Pure types: `SourceId/Kind`, `TranscriptSegment`, `Translation`, `Suggestion`, `LanguageCode`, `SessionState` machine | Do I/O or depend on other crates |
 | `crates/protocol` | Wire contracts (`SessionEvent`, `IpcError`, `AppSettings`, models, native messaging framing). ts-rs export | Contain behaviour beyond (de)serialization and framing |
 | `crates/audio` | Lock-free ring (`rtrb`), downmix, i16→f32, resampling (`rubato`), mixer, level meter, VAD port + hysteresis gate | Know about devices or models |
-| `crates/capture` | `CaptureBackend` port, WASAPI (Windows), pactl/parec (Linux), browser bridge, replay, composite router | Do inference, I/O beyond the device, or block in the device loop |
+| `crates/capture` | `CaptureBackend` port, WASAPI (Windows), Core Audio/SCK (macOS), pactl/parec (Linux), browser bridge, replay, composite router | Do inference, I/O beyond the device, or block in the device loop |
 | `crates/asr` | `SpeechRecognizer` port, LocalAgreement-2, `StreamingTranscriber`, whisper.cpp + Silero adapters (feature `whisper`), WER metric | Know about sessions or the UI |
 | `crates/session` | `SessionController` (state machine owner), DSP and ASR threads, `SpeechEngine` / `SegmentListener` / `EventSink` ports | Talk to LLMs or storage directly (only via listeners) |
 | `crates/llm` | `LanguageModel` port, `LlamaServer` supervisor, SSE client, prompt isolation | Depend on any Parlance crate |
 | `crates/translation` | `Translator` port, `LlmTranslator`, `TranslationWorker` listener | Block the ASR thread |
-| `crates/copilot` | Question detector, suggestion policy, rolling context, `CopilotWorker` listener | Block the ASR thread |
-| `crates/storage` | Opt-in SQLite history, `HistoryRecorder` listener with its own writer thread | Store audio |
+| `crates/copilot` | App-owned `CopilotService`, session adapters, bounded contextual requests and reply generation | Block the ASR thread |
+| `crates/storage` | Opt-in SQLite history and independent local project profiles | Store audio |
 | `crates/models` | Pinned catalog (URL, size, SHA-256), verified download, `ModelStore` | Load models |
 | `apps/desktop/src-tauri` | Composition root, Tauri commands, event hub, settings, LLM lifecycle (`intelligence.rs`) | Contain business logic |
 | `apps/cli` | Headless developer tool and benchmarks | — |
@@ -74,15 +74,15 @@ Allowed directions:
 | --- | --- | --- | --- |
 | Tauri main thread + webview | OS thread | Tauri | App |
 | Tokio runtime (Tauri async runtime) | thread pool | Tauri | App |
-| `parlance-wasapi-capture` / `parlance-parec` | OS thread per source | `CaptureStream` | Session |
+| `parlance-wasapi-capture` / `parlance-core-audio` / `parlance-parec` | OS thread per source | `CaptureStream` | Session |
 | `parec` | child process per source (Linux) | `ParecStream` | Session |
 | `parlance-dsp` | OS thread | `RunningPipeline` | Session |
 | `parlance-asr` | OS thread | `RunningPipeline` | Session |
 | Translation worker | Tokio task | `TranslationWorker` | Session |
-| Copilot dispatcher + one task per suggestion | Tokio tasks | `CopilotWorker` | Session |
+| Copilot worker, one active request + latest automatic pending | Tokio task | `CopilotService` | App; session-scoped audio adapter |
 | `parlance-history` | OS thread | `HistoryRecorder` (only if history is on) | Session |
-| LLM supervisor + log forwarders | Tokio tasks | `LlamaServer` | While translation or copilot is enabled and models are installed |
-| `llama-server` | child process | `LlamaServer` (Job Object on Windows) | Same |
+| LLM supervisor + log forwarders | Tokio tasks | `LlamaServer` | While translation, automatic copilot or an explicit manual query needs the installed model |
+| `llama-server` | child process | `LlamaServer` (Windows Job Object; Unix lifetime-pipe guardian) | Same |
 | `parlance-bridge` (accept) + `parlance-bridge-conn` (one per tab) | OS threads | `BridgeBackend` | App / per connection |
 | Model downloads | Tokio tasks (command futures) | `download_model` | Per download |
 
@@ -108,23 +108,29 @@ flowchart LR
   dsp -->|Level, Notice| hub
   subgraph listeners[SegmentListeners]
     tw[TranslationWorker<br/>queue 64] --> llm[llama-server]
-    cw[CopilotWorker] --> llm
+    cw[Copilot session adapter] --> cs[Application CopilotService]
+    cs --> llm
     hr[HistoryRecorder] --> db[(SQLite)]
   end
   tw -->|Translation| hub
-  cw -->|Suggestion| hub
+  cs -->|Suggestion| hub
+  manual[Written question + profile snapshot] --> cs
 ```
 
 Per utterance:
 
 1. The VAD gate emits `SpeechStarted` (with 200 ms pre-roll), `Speech(samples)`, `SpeechEnded` (600 ms silence or
    20 s cap). Silero via whisper.cpp; energy VAD when the Silero model is missing.
-2. While open, the utterance is re-decoded after every 1 s of new audio once it is ≥ 700 ms long, with a reduced
+2. While open, the utterance is re-decoded after every 500 ms of new audio once it is ≥ 500 ms long, with a reduced
    `audio_ctx` ("fast" pass). LocalAgreement-2 commits the prefix two consecutive hypotheses agree on.
-3. On close, a full-context pass produces the `Final` revision; the committed prefix stays frozen.
+3. On close, a full-context pass produces the `Final` revision; the committed prefix stays frozen within the
+   same language. Auto re-detects on each pass and resets agreement if the language changes.
 4. Segment ids are stable; `revision` increases monotonically; the UI replaces rows in place.
-5. Final segments go to translation (in order, two previous lines as chat context) and to the copilot
-   (question detection → reply in the speaker's language → translation into the user's language).
+5. Partials are translated latest-wins; final segments are translated in order, using two successful prior lines
+   as context. If source and target match, translation is passthrough. Generated repetition exceeding the source
+   repetition allowance is cancelled, cleared from the view and excluded from context.
+6. Final segments also go to the copilot (question detection → reply in the speaker's language → translation
+   into the user's language).
 
 ## Session state machine
 

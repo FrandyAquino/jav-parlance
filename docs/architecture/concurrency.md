@@ -15,9 +15,8 @@ non-blocking hand-off.
 | Replay thread | OS thread (`replay.rs`, tests/bench only) | Pace 10 ms chunks; retry pushes so no audio is lost | — |
 | `parlance-dsp` | OS thread (`session/src/dsp.rs`) | Drain rings, downmix, resample, mix, meter, run the VAD, `send` gate events (blocks when the ASR queue is full) | Decode speech, talk to the LLM |
 | `parlance-asr` | OS thread (`session/src/asr_worker.rs`) | Decode with whisper.cpp, emit events, call `SegmentListener::on_segment` | Await anything; listeners must return immediately |
-| Translation worker | Tokio task (`translation/src/worker.rs`) | Stream one translation at a time, in order | Be awaited by the ASR thread |
-| Copilot dispatcher | Tokio task (`copilot/src/worker.rs`) | Cancel the in-flight suggestion and spawn a new one per accepted question | — |
-| Suggestion task | Tokio task per question | Generate the reply, then translate it, publishing snapshots | Outlive cancellation |
+| Translation worker | Tokio task (`translation/src/worker.rs`) | Keep final translations ordered and interleave the newest live partial | Be awaited by the ASR thread |
+| Copilot service | One Tokio task (`copilot/src/service.rs`) | Generate and translate one request; retain latest pending automatic question behind manual work | Outlive cancellation or block ASR |
 | `parlance-history` | OS thread (`storage/src/recorder.rs`) | Own the SQLite connection and write final lines/translations | Be called synchronously from ASR |
 | LLM supervisor | Tokio task (`llm/src/server.rs`) | Spawn/kill `llama-server`, poll `/health`, back off | — |
 | Log forwarders | Tokio tasks | Forward sidecar stdout/stderr to `tracing` at debug | — |
@@ -30,13 +29,14 @@ non-blocking hand-off.
 | Capture → DSP | `rtrb` SPSC ring per source | `RING_CAPACITY` = 48 000 × 2 × 10 samples (10 s of 48 kHz stereo), `session/src/pipeline.rs` | Newest samples dropped and counted (`AudioSink::push` never blocks). DSP reports drops as a warning notice at most every 5 s (`DROP_REPORT_INTERVAL`) |
 | DSP → ASR | `std::sync::mpsc::sync_channel` of `GateEvent` | `ASR_QUEUE` = 512 | DSP blocks on `send`; the ring absorbs the stall, then overflows as above |
 | ASR → translation | `tokio::sync::mpsc` | `QUEUE` = 64 (`translation/src/worker.rs`) | `try_send` fails, the line is skipped, one "falling behind" warning per session |
-| ASR → copilot | `tokio::sync::mpsc::unbounded_channel` | unbounded, rate-limited by `SuggestionPolicy` (4 s cooldown, ≥ 12 chars) | n/a; only the newest question survives (previous one is cancelled) |
+| ASR/manual → copilot | App service active/pending slots + `Notify` | One active, one latest automatic pending; automatic policy 4 s / ≥12 chars | Manual supersedes active; automatic replaces pending while manual runs; replaced requests emit cancelled |
+| ASR → copilot conversation ingress | Nonblocking snapshot handoff | 64 final segments | Oldest queued segment is evicted when full; contention drops the incoming update; a notice and context-omission flag disclose loss |
 | ASR → history | `std::sync::mpsc::channel` | unbounded (final lines only) | n/a |
 | Mixer lag | `StreamMixer` | `MAX_MIX_LAG` = 16 000 / 4 samples (250 ms) | A lagging source is padded with silence |
 | Events → UI | `EventHub` → Tauri `Channel` | n/a | Dropped while no window is subscribed; UI resyncs state on `subscribe` |
 
-Other tunables: level window 800 samples (20 Hz), DSP idle sleep 10 ms, ASR poll 50 ms, partial step 1 s,
-min partial 700 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre-roll, 20 s max utterance.
+Other tunables: level window 800 samples (20 Hz), DSP idle sleep 10 ms, ASR poll 50 ms, partial step 500 ms,
+min partial 500 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre-roll, 20 s max utterance.
 
 ## Backpressure
 
@@ -54,14 +54,20 @@ min partial 700 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre
 - `llama-server` runs with `--parallel 2` (8 192 tokens shared), so a translation and a suggestion can run at once.
   There is **no request-level prioritisation** between translation and copilot yet (ADR 0005 states translation is
   scheduled first; that scheduler is planned).
-- Partials are never translated; only finals.
+- Partials use one latest-wins slot. After each final translation, the worker gives the newest live partial
+  a turn before the next queued final. A final, a retracted utterance, a new segment or corrected source language
+  cancels an obsolete in-flight partial. Same-segment word additions do not repeatedly restart generation.
+- A completed preview remains visible while a replacement streams a shorter/different prefix. Appended text
+  can stream immediately; a completed corrected result may still replace or shorten the prior preview.
 
 ## Cancellation
 
 - `CancellationToken` everywhere on the async side. `LanguageModel::generate` selects on the token and drops the
   HTTP response, which makes `llama-server` abort the generation and free its slot.
-- Copilot: a new accepted question cancels the previous suggestion's child token. `on_session_end` cancels all.
-- Translation: `on_session_end` closes the queue so queued jobs can finish; dropping the worker cancels its token.
+- Copilot: manual work takes precedence over automatic work. Ending a session cancels its automatic work and fences old adapters, while manual work can finish. A new session clears recent conversation; shutdown cancels all work and joins the service task.
+- LLM cancellation includes readiness and HTTP headers as well as SSE. A premature stream ending or token-limit finish is an error, not a complete reply.
+- Translation: `on_session_end` closes the queue so final jobs can drain. Obsolete partial futures are cancelled
+  and dropped, including while waiting for model readiness/HTTP headers; intentional preemption emits no error.
 - Downloads: `cancel_download` cancels the token for that id; the partial file is removed.
 
 ## Shutdown ordering (`RunningPipeline::shutdown`, called from `SessionController::stop`)
@@ -86,9 +92,12 @@ sequenceDiagram
 The same path runs automatically when every source ends: producers are abandoned → DSP exits → ASR finishes →
 the controller's watcher task calls `stop()`.
 
-App exit (`RunEvent::Exit`) calls `Intelligence::shutdown`, which cancels the LLM supervisor. On Windows the child is
-also in a Job Object with `KILL_ON_JOB_CLOSE`, so it dies with the app even on a crash. An active session is not
-stopped explicitly on exit.
+App exit (`RunEvent::ExitRequested`) prevents exit until the active start/stop request settles, stops capture,
+allows final translations/history up to 15 seconds to drain, then awaits LLM termination and joins writers.
+A bounded `RunEvent::Exit` fallback handles native macOS Quit paths that bypass `ExitRequested`. Total
+shutdown has a 30-second deadline; a timeout is logged as potentially incomplete history. New sessions are rejected while closing.
+Windows uses a Job Object with `KILL_ON_JOB_CLOSE`; Unix uses a guardian whose lifetime pipe closes even if the
+app is SIGKILLed. The guardian terminates the sidecar on EOF.
 
 ## Failure supervision
 
@@ -115,14 +124,12 @@ stopped explicitly on exit.
 
 **Linux parec**: restart after exit every 500 ms, up to 40 times; `app:<index>` does not reconnect.
 
+**macOS**: a monitor checks device/default/format changes outside the callback every 100 ms. A change or
+source termination produces `Failed` and releases the ring producer. Restart the session explicitly. Dropping
+the stream fences callbacks, destroys native resources, and joins the monitor before freeing its callback state.
+
 Capture events become UI notices (`DeviceLost` → warning, `Reconnected` → info, `Failed` → error).
 
 ## Known gaps
 
-- Stopping while `Starting` (Ctrl+Enter during start-up) can leave the pipeline running with state `Idle`: `stop()`
-  finds no pipeline yet, then `start()` stores one and fails `MarkRunning`.
-- The translation worker is dropped right after `on_session_end` (the ASR worker owns the only `Arc`), and its
-  `Drop` cancels the token, so translations still queued or in flight at stop are cancelled.
 - The bridge accept thread never exits and does not limit concurrent connections.
-- On Linux/macOS there is no process-group or parent-death hook for `llama-server`; it relies on the supervisor
-  task running `kill()` before the process exits.

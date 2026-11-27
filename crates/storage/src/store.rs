@@ -83,10 +83,10 @@ impl HistoryStore {
     fn migrate(connection: Connection) -> Result<Self, HistoryError> {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", true)?;
-        let applied: usize = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        for (version, migration) in MIGRATIONS.iter().enumerate().skip(applied) {
+        let applied: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        for (version, migration) in (1u32..).zip(MIGRATIONS).skip(applied as usize) {
             connection.execute_batch(migration)?;
-            connection.pragma_update(None, "user_version", version + 1)?;
+            connection.pragma_update(None, "user_version", version)?;
         }
         Ok(Self { connection })
     }

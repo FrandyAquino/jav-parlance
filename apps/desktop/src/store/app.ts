@@ -4,7 +4,7 @@ import type { AppSettings } from "@/bindings/AppSettings";
 import type { ModelDescriptor } from "@/bindings/ModelDescriptor";
 import type { ModelProgress } from "@/bindings/ModelProgress";
 import type { SourceDescriptor } from "@/bindings/SourceDescriptor";
-import { errorMessage, ipc } from "@/lib/ipc";
+import { errorMessage, ipc, isIpcError } from "@/lib/ipc";
 import { without } from "@/lib/record";
 
 interface AppStore {
@@ -31,6 +31,17 @@ function defaultSource(sources: SourceDescriptor[]): string | null {
   return preferred?.id ?? null;
 }
 
+function secondaryMicrophone(
+  sources: SourceDescriptor[],
+  primaryId: string | null,
+  microphoneId: string | null,
+): string | null {
+  if (sources.some((s) => s.id === primaryId && s.kind.type === "microphone")) return null;
+  return sources.some((s) => s.id === microphoneId && s.kind.type === "microphone") ? microphoneId : null;
+}
+
+let sourceRefreshGeneration = 0;
+
 export const useApp = create<AppStore>((set, get) => ({
   info: null,
   settings: null,
@@ -52,13 +63,20 @@ export const useApp = create<AppStore>((set, get) => ({
   },
 
   refreshSources: async () => {
+    const generation = ++sourceRefreshGeneration;
     try {
       const sources = await ipc.listSources();
+      if (generation !== sourceRefreshGeneration) return;
       const current = get().selectedSourceId;
       const stillExists = sources.some((s) => s.id === current);
-      set({ sources, selectedSourceId: stillExists ? current : defaultSource(sources) });
+      const selectedSourceId = stillExists ? current : defaultSource(sources);
+      set({
+        sources,
+        selectedSourceId,
+        microphoneId: secondaryMicrophone(sources, selectedSourceId, get().microphoneId),
+      });
     } catch (error) {
-      set({ error: errorMessage(error) });
+      if (generation === sourceRefreshGeneration) set({ error: errorMessage(error) });
     }
   },
 
@@ -74,8 +92,12 @@ export const useApp = create<AppStore>((set, get) => ({
     }
   },
 
-  selectSource: (id) => set({ selectedSourceId: id }),
-  selectMicrophone: (id) => set({ microphoneId: id }),
+  selectSource: (id) =>
+    set((s) => ({
+      selectedSourceId: id,
+      microphoneId: secondaryMicrophone(s.sources, id, s.microphoneId),
+    })),
+  selectMicrophone: (id) => set((s) => ({ microphoneId: secondaryMicrophone(s.sources, s.selectedSourceId, id) })),
 
   download: async (id) => {
     const track = (progress: ModelProgress) => set((s) => ({ downloads: { ...s.downloads, [id]: progress } }));
@@ -83,7 +105,7 @@ export const useApp = create<AppStore>((set, get) => ({
       await get().refreshModels();
       await ipc.downloadModel(id, track);
     } catch (error) {
-      set({ error: errorMessage(error) });
+      if (!isIpcError(error) || error.code !== "cancelled") set({ error: errorMessage(error) });
     } finally {
       set((s) => ({ downloads: without(s.downloads, [id]) }));
       await get().refreshModels();

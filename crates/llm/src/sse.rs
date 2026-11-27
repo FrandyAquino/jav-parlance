@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub enum SseItem {
     Token(String),
     Done,
+    Failed(String),
 }
 
 #[derive(Deserialize)]
@@ -18,6 +19,7 @@ struct Chunk {
 struct Choice {
     #[serde(default)]
     delta: Delta,
+    finish_reason: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -39,22 +41,39 @@ impl SseParser {
         while let Some(newline) = self.buffer.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.buffer.drain(..=newline).collect();
             let line = String::from_utf8_lossy(&line);
-            if let Some(item) = parse_line(line.trim_end()) {
-                items.push(item);
-            }
+            items.extend(parse_line(line.trim_end()));
         }
         items
     }
 }
 
-fn parse_line(line: &str) -> Option<SseItem> {
-    let data = line.strip_prefix("data:")?.trim_start();
+fn parse_line(line: &str) -> Vec<SseItem> {
+    let Some(data) = line.strip_prefix("data:") else {
+        return Vec::new();
+    };
+    let data = data.trim_start();
     if data == "[DONE]" {
-        return Some(SseItem::Done);
+        return vec![SseItem::Done];
     }
-    let chunk: Chunk = serde_json::from_str(data).ok()?;
-    let content = chunk.choices.into_iter().filter_map(|c| c.delta.content).collect::<String>();
-    (!content.is_empty()).then_some(SseItem::Token(content))
+    let Ok(chunk) = serde_json::from_str::<Chunk>(data) else {
+        return Vec::new();
+    };
+    let mut items = Vec::new();
+    for choice in chunk.choices {
+        if let Some(content) = choice.delta.content.filter(|c| !c.is_empty()) {
+            items.push(SseItem::Token(content));
+        }
+        if let Some(reason) = choice.finish_reason {
+            if reason == "stop" {
+                items.push(SseItem::Done);
+            } else {
+                items.push(SseItem::Failed(format!(
+                    "Generation ended before a complete reply ({reason}). Reduce the context or retry."
+                )));
+            }
+        }
+    }
+    items
 }
 
 #[cfg(test)]
@@ -89,5 +108,12 @@ mod tests {
         let mut parser = SseParser::default();
         let stream = ": keep-alive\ndata: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\ndata: nonsense\n";
         assert!(parser.push(stream.as_bytes()).is_empty());
+    }
+
+    #[test]
+    fn reports_truncated_completion_even_without_text() {
+        let mut parser = SseParser::default();
+        let items = parser.push(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n");
+        assert!(!items.is_empty(), "token-limit termination must be reported, not silently accepted");
     }
 }

@@ -6,11 +6,13 @@
 pub mod audio;
 pub mod copilot;
 pub mod language;
+pub mod profile;
 pub mod session;
 pub mod transcript;
 
 pub use audio::{AudioLevel, SourceDescriptor, SourceId, SourceKind};
-pub use copilot::{Suggestion, SuggestionId};
+pub use copilot::{Suggestion, SuggestionId, SuggestionOrigin, SuggestionStatus};
 pub use language::{LanguageCode, LanguageError};
+pub use profile::{ProfileAttribution, ProfileSnapshot, ProjectProfile};
 pub use session::{SessionCommand, SessionId, SessionState, TransitionError};
 pub use transcript::{SegmentId, Stability, TranscriptSegment, Translation};

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -12,6 +12,8 @@ use crate::translator::{TranslatedLine, TranslationRequest, Translator};
 
 const QUEUE: usize = 64;
 const CONTEXT_SENTENCES: usize = 2;
+/// Pending finals plus the one active partial bound retained display previews.
+const MAX_PREVIEWS: usize = QUEUE + 1;
 
 #[derive(Clone)]
 struct Job {
@@ -40,7 +42,8 @@ impl Job {
 #[derive(Default)]
 struct LatestPartial {
     job: Mutex<Option<Job>>,
-    last_text: Mutex<Option<(SegmentId, String)>>,
+    last_text: Mutex<Option<(SegmentId, String, Option<LanguageCode>)>>,
+    finalized: Mutex<Option<SegmentId>>,
     ready: Notify,
 }
 
@@ -51,10 +54,13 @@ impl LatestPartial {
 
     fn offer(&self, job: Job) {
         let mut last = Self::lock(&self.last_text);
-        if last.as_ref().is_some_and(|(id, text)| *id == job.segment_id && *text == job.text) {
+        if last
+            .as_ref()
+            .is_some_and(|(id, text, language)| *id == job.segment_id && *text == job.text && *language == job.language)
+        {
             return;
         }
-        *last = Some((job.segment_id, job.text.clone()));
+        *last = Some((job.segment_id, job.text.clone(), job.language.clone()));
         *Self::lock(&self.job) = Some(job);
         self.ready.notify_one();
     }
@@ -65,10 +71,24 @@ impl LatestPartial {
 
     /// A final supersedes any pending partial of the same segment.
     fn discard(&self, segment_id: SegmentId) {
+        {
+            let mut finalized = Self::lock(&self.finalized);
+            if finalized.is_none_or(|id| id.0 < segment_id.0) {
+                *finalized = Some(segment_id);
+            }
+        }
         let mut job = Self::lock(&self.job);
         if job.as_ref().is_some_and(|j| j.segment_id == segment_id) {
             job.take();
         }
+        self.ready.notify_one();
+    }
+
+    fn supersedes(&self, id: SegmentId, language: &Option<LanguageCode>) -> bool {
+        if Self::lock(&self.finalized).is_some_and(|closed| closed.0 >= id.0) {
+            return true;
+        }
+        Self::lock(&self.job).as_ref().is_some_and(|job| job.segment_id != id || &job.language != language)
     }
 }
 
@@ -93,7 +113,14 @@ impl TranslationWorker {
     pub fn spawn(translator: Arc<dyn Translator>, target: LanguageCode, events: EventSink) -> Arc<Self> {
         let (tx, rx) = mpsc::channel(QUEUE);
         let partial = Arc::new(LatestPartial::default());
-        let task = Task { translator, target, events: Arc::clone(&events), context: VecDeque::new(), failed: false };
+        let task = Task {
+            translator,
+            target,
+            events: Arc::clone(&events),
+            context: VecDeque::new(),
+            previews: Mutex::new(BTreeMap::new()),
+            failed: false,
+        };
         tokio::spawn(task.run(rx, Arc::clone(&partial), CancellationToken::new()));
         Arc::new(Self { finals: Mutex::new(Some(tx)), partial, events, warned_overflow: AtomicBool::new(false) })
     }
@@ -101,6 +128,9 @@ impl TranslationWorker {
 
 impl SegmentListener for TranslationWorker {
     fn on_segment(&self, segment: &TranscriptSegment) {
+        if segment.is_final() {
+            self.partial.discard(segment.id);
+        }
         if segment.text().trim().is_empty() {
             return;
         }
@@ -109,7 +139,6 @@ impl SegmentListener for TranslationWorker {
             self.partial.offer(job);
             return;
         }
-        self.partial.discard(job.segment_id);
         let finals = self.finals.lock().unwrap_or_else(|p| p.into_inner());
         let Some(sender) = finals.as_ref() else { return };
         if sender.try_send(job).is_err() && !self.warned_overflow.swap(true, Ordering::Relaxed) {
@@ -133,29 +162,70 @@ struct Task {
     target: LanguageCode,
     events: EventSink,
     context: VecDeque<TranslatedLine>,
+    previews: Mutex<BTreeMap<u64, String>>,
     failed: bool,
 }
 
 impl Task {
     async fn run(mut self, mut finals: mpsc::Receiver<Job>, partial: Arc<LatestPartial>, cancel: CancellationToken) {
+        let mut next_final = None;
+        let mut prefer_live = false;
         loop {
-            let job = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => break,
-                job = finals.recv() => match job {
+            let ready = if prefer_live { partial.take() } else { None };
+            let job =
+                match ready.or_else(|| next_final.take()).or_else(|| finals.try_recv().ok()).or_else(|| partial.take())
+                {
                     Some(job) => job,
-                    None => break,
-                },
-                _ = partial.ready.notified() => match partial.take() {
-                    Some(job) => job,
-                    None => continue,
-                },
-            };
-            self.translate(job, &cancel).await;
+                    None => tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => break,
+                        job = finals.recv() => match job { Some(job) => job, None => break },
+                        _ = partial.ready.notified() => continue,
+                    },
+                };
+            prefer_live = job.is_final;
+            if job.is_final {
+                self.translate(job, &cancel).await;
+                continue;
+            }
+            let (id, language) = (job.segment_id, job.language.clone());
+            if partial.supersedes(id, &language) {
+                continue;
+            }
+            let generation = cancel.child_token();
+            let work = self.translate(job, &generation);
+            tokio::pin!(work);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => return,
+                    _ = &mut work => break,
+                    job = finals.recv(), if next_final.is_none() => {
+                        let Some(job) = job else { generation.cancel(); return; };
+                        let superseded = job.segment_id.0 >= id.0;
+                        next_final = Some(job);
+                        if superseded { generation.cancel(); break; }
+                    },
+                    _ = partial.ready.notified() => {
+                        if partial.supersedes(id, &language) { generation.cancel(); break; }
+                    },
+                }
+            }
         }
     }
 
     fn emit(&self, job: &Job, text: String, is_final: bool) {
+        {
+            let mut previews = self.previews.lock().unwrap_or_else(|p| p.into_inner());
+            if is_final {
+                previews.remove(&job.segment_id.0);
+            } else {
+                previews.insert(job.segment_id.0, text.clone());
+                while previews.len() > MAX_PREVIEWS {
+                    previews.pop_first();
+                }
+            }
+        }
         (self.events)(SessionEvent::Translation {
             translation: Translation {
                 segment_id: job.segment_id,
@@ -172,11 +242,16 @@ impl Task {
             self.emit(&job, job.text.clone(), job.is_final);
             return;
         }
+        let previous =
+            self.previews.lock().unwrap_or_else(|p| p.into_inner()).get(&job.segment_id.0).cloned().unwrap_or_default();
         let streamed = Mutex::new(String::new());
         let on_token = |token: &str| {
             let mut text = streamed.lock().unwrap_or_else(|p| p.into_inner());
             text.push_str(token);
-            self.emit(&job, text.trim().to_owned(), false);
+            let next = text.trim();
+            if next.starts_with(&previous) {
+                self.emit(&job, next.to_owned(), false);
+            }
         };
         let request = TranslationRequest {
             text: job.text.clone(),
@@ -192,14 +267,20 @@ impl Task {
                     self.remember(TranslatedLine { source: job.text, translation: text });
                 }
             }
-            Err(error) if !self.failed => {
-                self.failed = true;
-                tracing::warn!(%error, "translation failed");
-                (self.events)(SessionEvent::Notice {
-                    notice: Notice::warning(format!("Translation unavailable: {error}")),
-                });
+            Err(error) => {
+                let is_final = previous.is_empty() && job.is_final;
+                self.emit(&job, previous, is_final);
+                if job.is_final {
+                    self.previews.lock().unwrap_or_else(|p| p.into_inner()).remove(&job.segment_id.0);
+                }
+                if !self.failed {
+                    self.failed = true;
+                    tracing::warn!(%error, "translation failed");
+                    (self.events)(SessionEvent::Notice {
+                        notice: Notice::warning(format!("Translation unavailable: {error}")),
+                    });
+                }
             }
-            Err(_) => {}
         }
     }
 
@@ -308,5 +389,321 @@ mod tests {
         slot.offer(Job::from_segment(&segment(2, 0, "c", "en", Stability::Partial)));
         slot.discard(SegmentId(2));
         assert!(slot.take().is_none());
+    }
+
+    #[test]
+    fn language_correction_is_not_deduplicated_when_words_are_unchanged() {
+        let slot = LatestPartial::default();
+        slot.offer(Job::from_segment(&segment(1, 0, "hola", "en", Stability::Partial)));
+        slot.offer(Job::from_segment(&segment(1, 1, "hola", "es", Stability::Partial)));
+        let corrected = slot.take().unwrap();
+        assert_eq!(corrected.revision, 1);
+        assert_eq!(corrected.language.unwrap().as_str(), "es");
+    }
+
+    struct FailsFirst(std::sync::atomic::AtomicBool);
+
+    #[async_trait]
+    impl Translator for FailsFirst {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            on_token: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            if !self.0.swap(true, Ordering::SeqCst) {
+                on_token("al aeropuerto al aeropuerto ");
+                return Err(TranslationError::Model(parlance_llm::LlmError::Request("failed generation".into())));
+            }
+            Ok(format!("clean context={}", request.context.len()))
+        }
+    }
+
+    #[tokio::test]
+    async fn clears_rejected_streamed_text_and_does_not_remember_it() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(
+            Arc::new(FailsFirst(AtomicBool::new(false))),
+            LanguageCode::new("es").unwrap(),
+            sink,
+        );
+        worker.on_segment(&segment(1, 1, "first", "en", Stability::Final));
+        worker.on_segment(&segment(2, 1, "next", "en", Stability::Final));
+        worker.on_session_end();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if log.lock().unwrap().iter().any(|t| t.segment_id == SegmentId(2) && t.is_final) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let log = log.lock().unwrap();
+        let first = log.iter().rev().find(|t| t.segment_id == SegmentId(1)).unwrap();
+        assert!(first.text.is_empty(), "failed provisional output must not remain visible");
+        assert!(first.is_final);
+        assert_eq!(log.last().unwrap().text, "clean context=0");
+    }
+
+    struct SlowPreview;
+
+    #[async_trait]
+    impl Translator for SlowPreview {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            on_token: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            let words = if request.text == "short correction" {
+                vec!["short"]
+            } else if request.text == "first" {
+                vec!["one ", "two ", "three"]
+            } else {
+                vec!["one ", "two ", "three ", "four"]
+            };
+            for word in &words {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                on_token(word);
+            }
+            Ok(words.concat())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn newer_partial_does_not_erase_the_visible_translation_as_it_streams() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(Arc::new(SlowPreview), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "first", "en", Stability::Partial));
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        assert_eq!(log.lock().unwrap().last().unwrap().text, "one two three");
+        worker.on_segment(&segment(1, 1, "next", "en", Stability::Partial));
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert_eq!(log.lock().unwrap().last().unwrap().text, "one two three");
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(log.lock().unwrap().last().unwrap().text, "one two three four");
+        worker.on_session_end();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn continuous_same_segment_updates_allow_progress_before_any_pause() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(Arc::new(SlowPreview), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "first", "en", Stability::Partial));
+        for revision in 1..=3 {
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+            worker.on_segment(&segment(1, revision, "next", "en", Stability::Partial));
+        }
+        assert!(log.lock().unwrap().iter().any(|t| t.source_revision == 0 && t.text == "one two three"));
+        worker.on_session_end();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_corrections_can_replace_a_longer_preview() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(Arc::new(SlowPreview), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "first", "en", Stability::Partial));
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+        worker.on_segment(&segment(1, 1, "short correction", "en", Stability::Final));
+        worker.on_session_end();
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let log = log.lock().unwrap();
+        assert_eq!(log.last().unwrap().text, "short");
+        assert!(log.last().unwrap().is_final);
+    }
+
+    struct BlocksOld {
+        entered: Notify,
+        token: Mutex<Option<CancellationToken>>,
+    }
+
+    #[async_trait]
+    impl Translator for BlocksOld {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            cancel: CancellationToken,
+            _: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            if request.text == "old" {
+                *self.token.lock().unwrap() = Some(cancel.clone());
+                self.entered.notify_one();
+                cancel.cancelled().await;
+                return Err(parlance_llm::LlmError::Cancelled.into());
+            }
+            Ok(request.text)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_final_preempts_its_obsolete_partial_without_a_failure_notice() {
+        let (sink, log) = recorder();
+        let notices = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = notices.clone();
+        let events: EventSink = Arc::new(move |e| {
+            if matches!(e, SessionEvent::Notice { .. }) {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+            sink(e);
+        });
+        let translator = Arc::new(BlocksOld { entered: Notify::new(), token: Mutex::new(None) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), events);
+        worker.on_segment(&segment(1, 0, "old", "en", Stability::Partial));
+        translator.entered.notified().await;
+        worker.on_segment(&segment(1, 1, "complete", "en", Stability::Final));
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            loop {
+                if log.lock().unwrap().iter().any(|t| t.is_final && t.text == "complete") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("final must not wait for the obsolete generation");
+        assert!(translator.token.lock().unwrap().as_ref().unwrap().is_cancelled());
+        assert_eq!(notices.load(Ordering::SeqCst), 0);
+        worker.on_session_end();
+    }
+
+    #[tokio::test]
+    async fn a_new_segment_preempts_an_obsolete_partial() {
+        let (sink, log) = recorder();
+        let translator = Arc::new(BlocksOld { entered: Notify::new(), token: Mutex::new(None) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "old", "en", Stability::Partial));
+        translator.entered.notified().await;
+        worker.on_segment(&segment(2, 0, "current", "en", Stability::Partial));
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while !log.lock().unwrap().iter().any(|t| t.segment_id == SegmentId(2)) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(translator.token.lock().unwrap().as_ref().unwrap().is_cancelled());
+        worker.on_session_end();
+    }
+
+    #[tokio::test]
+    async fn an_empty_final_cancels_a_retracted_partial() {
+        let (sink, _) = recorder();
+        let translator = Arc::new(BlocksOld { entered: Notify::new(), token: Mutex::new(None) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "old", "en", Stability::Partial));
+        translator.entered.notified().await;
+        worker.on_segment(&segment(1, 1, "", "en", Stability::Final));
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while !translator.token.lock().unwrap().as_ref().unwrap().is_cancelled() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        worker.on_session_end();
+    }
+
+    struct FailsFinal;
+
+    #[async_trait]
+    impl Translator for FailsFinal {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            on_token: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            if request.text == "partial" {
+                return Ok("useful preview".into());
+            }
+            on_token("rejected output");
+            Err(parlance_llm::LlmError::Request("generation failed".into()).into())
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_final_preserves_the_preview_without_claiming_it_is_final() {
+        let (sink, log) = recorder();
+        let worker = TranslationWorker::spawn(Arc::new(FailsFinal), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "partial", "en", Stability::Partial));
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while log.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        worker.on_segment(&segment(1, 1, "final", "en", Stability::Final));
+        worker.on_session_end();
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while !log.lock().unwrap().iter().any(|t| t.source_revision == 1) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let log = log.lock().unwrap();
+        assert_eq!(log.last().unwrap().text, "useful preview");
+        assert!(!log.last().unwrap().is_final);
+        assert!(!log.iter().any(|t| t.text.contains("rejected")));
+    }
+
+    #[tokio::test]
+    async fn session_end_drains_ordered_finals_after_preempting_a_partial() {
+        let (sink, log) = recorder();
+        let translator = Arc::new(BlocksOld { entered: Notify::new(), token: Mutex::new(None) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 0, "old", "en", Stability::Partial));
+        translator.entered.notified().await;
+        for id in 1..=3 {
+            worker.on_segment(&segment(id, 1, &format!("final {id}"), "en", Stability::Final));
+        }
+        worker.on_session_end();
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while log.lock().unwrap().iter().filter(|t| t.is_final).count() < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let finals: Vec<_> = log.lock().unwrap().iter().filter(|t| t.is_final).map(|t| t.text.clone()).collect();
+        assert_eq!(finals, ["final 1", "final 2", "final 3"]);
+        assert!(translator.token.lock().unwrap().as_ref().unwrap().is_cancelled());
+    }
+
+    struct Ordered(Mutex<Vec<String>>);
+
+    #[async_trait]
+    impl Translator for Ordered {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            _: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            self.0.lock().unwrap().push(request.text.clone());
+            Ok(request.text)
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_finals_do_not_starve_the_current_live_partial() {
+        let (sink, _) = recorder();
+        let translator = Arc::new(Ordered(Mutex::new(Vec::new())));
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 1, "final one", "en", Stability::Final));
+        worker.on_segment(&segment(2, 1, "final two", "en", Stability::Final));
+        worker.on_segment(&segment(3, 0, "live", "en", Stability::Partial));
+        tokio::time::timeout(std::time::Duration::from_millis(200), async {
+            while translator.0.lock().unwrap().len() < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*translator.0.lock().unwrap(), ["final one", "live", "final two"]);
+        worker.on_session_end();
     }
 }

@@ -10,6 +10,8 @@ mod job;
 pub mod prompt;
 mod server;
 mod sse;
+#[cfg(unix)]
+mod unix;
 
 use async_trait::async_trait;
 use serde::Serialize;
