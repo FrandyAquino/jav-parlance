@@ -55,6 +55,9 @@ function acceptsUpdate(current: Suggestion | null, next: Suggestion): boolean {
   return isPending(current);
 }
 
+// The backend can only cancel a request after admitting it.
+let pendingAdmission: { requestId: string; promise: Promise<void> } | null = null;
+
 export const useCopilot = create<CopilotStore>((set, get) => ({
   ...initialCopilot,
   setMode: (mode) => {
@@ -107,7 +110,7 @@ export const useCopilot = create<CopilotStore>((set, get) => ({
       tab: "manual",
     });
     try {
-      await ipc.askCopilot({
+      const submission = ipc.askCopilot({
         requestId,
         question: question.trim(),
         idea: idea.trim(),
@@ -115,9 +118,12 @@ export const useCopilot = create<CopilotStore>((set, get) => ({
         userLanguage,
         profileId,
       });
+      pendingAdmission = { requestId, promise: submission };
+      await submission;
     } catch (error) {
       if (get().manualRequestId === requestId) set({ submissionError: errorMessage(error) });
     } finally {
+      if (pendingAdmission?.requestId === requestId) pendingAdmission = null;
       if (get().manualRequestId === requestId) set({ submitting: false });
     }
   },
@@ -125,6 +131,7 @@ export const useCopilot = create<CopilotStore>((set, get) => ({
     const id = get().manualRequestId;
     if (!id) return;
     try {
+      if (pendingAdmission?.requestId === id) await pendingAdmission.promise;
       await ipc.cancelCopilot(id);
     } catch (error) {
       if (get().manualRequestId === id) set({ submissionError: errorMessage(error) });

@@ -69,6 +69,15 @@ it("keeps a failed request editable and displays its error", async () => {
   expect(screen.getByLabelText("Your question")).toHaveValue("How do we deploy?");
 });
 
+it("shows a cancellation failure without discarding the question", async () => {
+  vi.spyOn(ipc, "cancelCopilot").mockRejectedValue(new Error("Could not cancel the answer."));
+  useCopilot.setState({ question: "How do we deploy?", manualRequestId: "pending", submitting: true });
+  render(<CopilotPanel enabled={false} onOpenSettings={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel answer" }));
+  expect(await screen.findByText("Could not cancel the answer.")).toBeInTheDocument();
+  expect(screen.getByLabelText("Your question")).toHaveValue("How do we deploy?");
+});
+
 it("submits from the idea field with Command Enter", async () => {
   vi.spyOn(ipc, "askCopilot").mockResolvedValue();
   useCopilot.getState().setDraft({ question: "How do we deploy?", idea: "Mention staging" });

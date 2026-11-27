@@ -122,3 +122,41 @@ it("does not enter reading mode or pin an unfinished response", () => {
   useCopilot.getState().pin(reply({ status: "failed", isComplete: false }));
   expect(useCopilot.getState().pinned).toBeNull();
 });
+
+it("honors Stop while the backend is still admitting the question", async () => {
+  let admit: (() => void) | undefined;
+  let activeRequest: string | null = null;
+  vi.mocked(ipc.askCopilot).mockImplementation(
+    (request) => new Promise<void>((resolve) => {
+      admit = () => {
+        activeRequest = request.requestId;
+        useCopilot.getState().receive(reply({
+          requestId: request.requestId,
+          origin: "manual",
+          status: "queued",
+          isComplete: false,
+        }));
+        resolve();
+      };
+    }),
+  );
+  vi.mocked(ipc.cancelCopilot).mockImplementation(async (requestId) => {
+    if (activeRequest !== requestId) return;
+    activeRequest = null;
+    useCopilot.getState().receive(reply({
+      requestId,
+      origin: "manual",
+      status: "cancelled",
+      isComplete: false,
+    }));
+  });
+  useCopilot.getState().setDraft({ question: "Why Redis?" });
+  const asking = useCopilot.getState().ask("es", null);
+  const stopping = useCopilot.getState().cancel();
+  if (!admit) throw new Error("Submission did not reach the backend");
+  admit();
+  await Promise.all([asking, stopping]);
+  expect(activeRequest).toBeNull();
+  expect(useCopilot.getState().manualResult?.status).toBe("cancelled");
+  expect(useCopilot.getState().submitting).toBe(false);
+});
