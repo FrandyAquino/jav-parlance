@@ -4,18 +4,22 @@
 use parlance_domain::{SessionState, SourceDescriptor};
 use parlance_models::find;
 use parlance_protocol::{
-    AppInfo, AppSettings, CaptureSupport, ModelDescriptor, ModelProgress, SessionEvent, StartSessionRequest,
+    AppInfo, AppSettings, AskCopilotRequest, CaptureSupport, ModelDescriptor, ModelProgress, ProjectProfiles,
+    SaveProjectProfileRequest, SessionEvent, StartSessionRequest,
 };
 use std::sync::Arc;
 
-use parlance_protocol::{ErrorCode, IpcError};
 use parlance_session::{EventSink, SegmentListener, SessionConfig};
-use parlance_storage::{HistoryEntry, HistoryLine, HistoryRecorder, HistoryStore};
+use parlance_storage::{
+    HistoryEntry, HistoryLine, HistoryRecorder, HistoryStore, JsonProfileRepository, ProfileRepository,
+};
 use tauri::State;
 use tauri::ipc::Channel;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{CommandResult, from_capture, from_download, from_session, invalid};
+use crate::error::{
+    CommandResult, from_capture, from_download, from_intelligence, from_profile, from_session, invalid, storage,
+};
 use crate::state::AppState;
 
 #[tauri::command]
@@ -53,12 +57,17 @@ pub fn get_settings(state: State<'_, AppState>) -> AppSettings {
 
 #[tauri::command]
 pub async fn update_settings(state: State<'_, AppState>, settings: AppSettings) -> CommandResult<AppSettings> {
+    let _intelligence = state.intelligence_requests.lock().await;
     for model in [&settings.speech_model, &settings.language_model] {
         if find(model).is_none() {
             return Err(invalid(format!("unknown model `{model}`")));
         }
     }
-    state.settings.replace(settings).map_err(|e| invalid(e.to_string()))?;
+    let repository = Arc::clone(&state.settings);
+    tokio::task::spawn_blocking(move || repository.replace(settings))
+        .await
+        .map_err(|e| storage(e.to_string()))?
+        .map_err(|e| storage(e.to_string()))?;
     let current = state.settings.get();
     state.intelligence.reconcile(&current);
     Ok(current)
@@ -102,6 +111,7 @@ pub async fn download_model(
     match result {
         Ok(_) => {
             report(entry.size_bytes, true, None);
+            let _intelligence = state.intelligence_requests.lock().await;
             state.intelligence.reconcile(&state.settings.get());
             Ok(())
         }
@@ -141,6 +151,11 @@ pub async fn start_session(state: State<'_, AppState>, request: StartSessionRequ
     if state.closing.load(std::sync::atomic::Ordering::Acquire) {
         return Err(invalid("Parlance is closing"));
     }
+    state
+        .controller
+        .state()
+        .apply(parlance_domain::SessionCommand::Start)
+        .map_err(|error| from_session(parlance_session::SessionError::InvalidTransition(error)))?;
     let settings = state.settings.get();
     let mut sources = vec![request.source_id];
     sources.extend(request.microphone_id);
@@ -153,10 +168,14 @@ pub async fn start_session(state: State<'_, AppState>, request: StartSessionRequ
         writers.push(completion);
     }
     let events = record_translations(state.events.sink(), recorder.clone());
-    let mut listeners = state.intelligence.listeners(&settings, &events);
+    let mut listeners = state.intelligence.listeners(&settings, &events, state.active_profile_source());
     listeners.extend(recorder.map(|r| r as Arc<dyn SegmentListener>));
     let config = SessionConfig::new(sources, settings.source_language.clone());
-    state.controller.start(config, listeners).await.map_err(from_session)
+    let result = state.controller.start(config, listeners).await;
+    if result.is_err() {
+        state.intelligence.stop_session();
+    }
+    result.map_err(from_session)
 }
 
 /// Tees translation events into the history recorder when history is on.
@@ -171,28 +190,88 @@ fn record_translations(sink: EventSink, recorder: Option<Arc<HistoryRecorder>>) 
 }
 
 fn history(state: &AppState) -> CommandResult<HistoryStore> {
-    HistoryStore::open(&state.history_db).map_err(|e| IpcError::new(ErrorCode::Storage, e.to_string()))
+    HistoryStore::open(&state.history_db).map_err(|e| storage(e.to_string()))
 }
 
 #[tauri::command]
 pub fn list_history(state: State<'_, AppState>) -> CommandResult<Vec<HistoryEntry>> {
-    history(&state)?.list(50).map_err(|e| IpcError::new(ErrorCode::Storage, e.to_string()))
+    history(&state)?.list(50).map_err(|e| storage(e.to_string()))
 }
 
 #[tauri::command]
 pub fn history_transcript(state: State<'_, AppState>, id: i64) -> CommandResult<Vec<HistoryLine>> {
-    history(&state)?.transcript(id).map_err(|e| IpcError::new(ErrorCode::Storage, e.to_string()))
+    history(&state)?.transcript(id).map_err(|e| storage(e.to_string()))
 }
 
 #[tauri::command]
 pub fn delete_history(state: State<'_, AppState>, id: i64) -> CommandResult<()> {
-    history(&state)?.delete(id).map(drop).map_err(|e| IpcError::new(ErrorCode::Storage, e.to_string()))
+    history(&state)?.delete(id).map(drop).map_err(|e| storage(e.to_string()))
 }
 
 #[tauri::command]
 pub async fn stop_session(state: State<'_, AppState>) -> CommandResult<()> {
     let _request = state.session_requests.lock().await;
     state.controller.stop().await.map_err(from_session)
+}
+
+fn profiles(state: &AppState) -> CommandResult<Arc<JsonProfileRepository>> {
+    state.profiles.as_ref().cloned().map_err(|message| storage(message.clone()))
+}
+
+#[tauri::command]
+pub fn list_project_profiles(state: State<'_, AppState>) -> CommandResult<ProjectProfiles> {
+    profiles(&state)?.list().map_err(from_profile)
+}
+
+#[tauri::command]
+pub async fn save_project_profile(
+    state: State<'_, AppState>,
+    request: SaveProjectProfileRequest,
+) -> CommandResult<ProjectProfiles> {
+    let repository = profiles(&state)?;
+    tokio::task::spawn_blocking(move || repository.save(request))
+        .await
+        .map_err(|e| storage(e.to_string()))?
+        .map_err(from_profile)
+}
+
+#[tauri::command]
+pub async fn delete_project_profile(state: State<'_, AppState>, id: String) -> CommandResult<ProjectProfiles> {
+    let repository = profiles(&state)?;
+    tokio::task::spawn_blocking(move || repository.delete(&id))
+        .await
+        .map_err(|e| storage(e.to_string()))?
+        .map_err(from_profile)
+}
+
+#[tauri::command]
+pub async fn set_active_project_profile(
+    state: State<'_, AppState>,
+    id: Option<String>,
+) -> CommandResult<ProjectProfiles> {
+    let repository = profiles(&state)?;
+    tokio::task::spawn_blocking(move || repository.set_active(id.as_deref()))
+        .await
+        .map_err(|e| storage(e.to_string()))?
+        .map_err(from_profile)
+}
+
+#[tauri::command]
+pub async fn ask_copilot(state: State<'_, AppState>, request: AskCopilotRequest) -> CommandResult<()> {
+    let _intelligence = state.intelligence_requests.lock().await;
+    if state.closing.load(std::sync::atomic::Ordering::Acquire) {
+        return Err(invalid("Parlance is closing"));
+    }
+    let profile = match request.profile_id.as_deref() {
+        Some(id) => profiles(&state)?.snapshot(Some(id)).map_err(from_profile)?,
+        None => None,
+    };
+    state.intelligence.submit_manual(&state.settings.get(), request, profile).map_err(from_intelligence)
+}
+
+#[tauri::command]
+pub fn cancel_copilot(state: State<'_, AppState>, request_id: String) {
+    state.intelligence.cancel_request(&request_id);
 }
 
 #[tauri::command]

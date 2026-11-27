@@ -16,8 +16,7 @@ non-blocking hand-off.
 | `parlance-dsp` | OS thread (`session/src/dsp.rs`) | Drain rings, downmix, resample, mix, meter, run the VAD, `send` gate events (blocks when the ASR queue is full) | Decode speech, talk to the LLM |
 | `parlance-asr` | OS thread (`session/src/asr_worker.rs`) | Decode with whisper.cpp, emit events, call `SegmentListener::on_segment` | Await anything; listeners must return immediately |
 | Translation worker | Tokio task (`translation/src/worker.rs`) | Keep final translations ordered and interleave the newest live partial | Be awaited by the ASR thread |
-| Copilot dispatcher | Tokio task (`copilot/src/worker.rs`) | Cancel the in-flight suggestion and spawn a new one per accepted question | — |
-| Suggestion task | Tokio task per question | Generate the reply, then translate it, publishing snapshots | Outlive cancellation |
+| Copilot service | One Tokio task (`copilot/src/service.rs`) | Generate and translate one request; retain latest pending automatic question behind manual work | Outlive cancellation or block ASR |
 | `parlance-history` | OS thread (`storage/src/recorder.rs`) | Own the SQLite connection and write final lines/translations | Be called synchronously from ASR |
 | LLM supervisor | Tokio task (`llm/src/server.rs`) | Spawn/kill `llama-server`, poll `/health`, back off | — |
 | Log forwarders | Tokio tasks | Forward sidecar stdout/stderr to `tracing` at debug | — |
@@ -30,7 +29,8 @@ non-blocking hand-off.
 | Capture → DSP | `rtrb` SPSC ring per source | `RING_CAPACITY` = 48 000 × 2 × 10 samples (10 s of 48 kHz stereo), `session/src/pipeline.rs` | Newest samples dropped and counted (`AudioSink::push` never blocks). DSP reports drops as a warning notice at most every 5 s (`DROP_REPORT_INTERVAL`) |
 | DSP → ASR | `std::sync::mpsc::sync_channel` of `GateEvent` | `ASR_QUEUE` = 512 | DSP blocks on `send`; the ring absorbs the stall, then overflows as above |
 | ASR → translation | `tokio::sync::mpsc` | `QUEUE` = 64 (`translation/src/worker.rs`) | `try_send` fails, the line is skipped, one "falling behind" warning per session |
-| ASR → copilot | `tokio::sync::mpsc::unbounded_channel` | unbounded, rate-limited by `SuggestionPolicy` (4 s cooldown, ≥ 12 chars) | n/a; only the newest question survives (previous one is cancelled) |
+| ASR/manual → copilot | App service active/pending slots + `Notify` | One active, one latest automatic pending; automatic policy 4 s / ≥12 chars | Manual supersedes active; automatic replaces pending while manual runs; replaced requests emit cancelled |
+| ASR → copilot conversation ingress | Nonblocking snapshot handoff | 64 final segments | Oldest queued segment is evicted when full; contention drops the incoming update; a notice and context-omission flag disclose loss |
 | ASR → history | `std::sync::mpsc::channel` | unbounded (final lines only) | n/a |
 | Mixer lag | `StreamMixer` | `MAX_MIX_LAG` = 16 000 / 4 samples (250 ms) | A lagging source is padded with silence |
 | Events → UI | `EventHub` → Tauri `Channel` | n/a | Dropped while no window is subscribed; UI resyncs state on `subscribe` |
@@ -64,7 +64,8 @@ min partial 500 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre
 
 - `CancellationToken` everywhere on the async side. `LanguageModel::generate` selects on the token and drops the
   HTTP response, which makes `llama-server` abort the generation and free its slot.
-- Copilot: a new accepted question cancels the previous suggestion's child token. `on_session_end` cancels all.
+- Copilot: manual work takes precedence over automatic work. Ending a session cancels its automatic work and fences old adapters, while manual work can finish. A new session clears recent conversation; shutdown cancels all work and joins the service task.
+- LLM cancellation includes readiness and HTTP headers as well as SSE. A premature stream ending or token-limit finish is an error, not a complete reply.
 - Translation: `on_session_end` closes the queue so final jobs can drain. Obsolete partial futures are cancelled
   and dropped, including while waiting for model readiness/HTTP headers; intentional preemption emits no error.
 - Downloads: `cancel_download` cancels the token for that id; the partial file is removed.

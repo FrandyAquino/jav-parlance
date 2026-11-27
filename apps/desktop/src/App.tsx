@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CopilotPanel } from "./components/CopilotPanel";
 import { EmptyState } from "./components/EmptyState";
 import { Notices } from "./components/Notices";
+import { PinnedReply } from "./components/PinnedReply";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { TitleBar } from "./components/TitleBar";
 import { TranscriptView } from "./components/TranscriptView";
@@ -10,9 +11,13 @@ import { NoiseTexture } from "./components/ui/noise-texture";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { useShortcuts } from "./hooks/useShortcuts";
 import { useTheme } from "./hooks/useTheme";
+import { useWindowMode } from "./hooks/useWindowMode";
 import { errorMessage, ipc } from "./lib/ipc";
 import { missingRequiredModels, useApp } from "./store/app";
 import { dispatchSessionEvent, isActive, useSession } from "./store/session";
+import { useCopilot } from "./store/copilot";
+import { useProfiles } from "./store/profiles";
+import { Button } from "./components/ui/button";
 
 export function App() {
   const load = useApp((s) => s.load);
@@ -26,14 +31,22 @@ export function App() {
   const state = useSession((s) => s.state);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [copilotOpen, setCopilotOpen] = useState(true);
+  const mode = useCopilot((s) => s.mode);
+  const pinnedReply = useCopilot((s) => s.pinned);
   const [actionError, setActionError] = useState<string | null>(null);
+  const resizeError = useWindowMode(mode);
 
   useTheme(settings?.theme, info?.platform);
 
   useEffect(() => {
     void ipc.subscribe(dispatchSessionEvent);
-    void load();
+    void load().then(() => {
+      if (!useCopilot.getState().question)
+        useCopilot.setState({
+          replyLanguage: useApp.getState().settings?.sourceLanguage ?? "en",
+        });
+    });
+    void useProfiles.getState().load();
   }, [load]);
 
   const run = useCallback(async (action: () => Promise<void>) => {
@@ -59,6 +72,11 @@ export function App() {
     else if (state.state === "paused") void run(ipc.resumeSession);
   }, [state, run]);
 
+  const toggleCopilot = useCallback(() => {
+    const current = useCopilot.getState();
+    current.setMode(current.mode === "compact" ? "expanded" : "compact");
+  }, []);
+
   const toggleAlwaysOnTop = useCallback(() => {
     const next = !(settings?.alwaysOnTop ?? true);
     void run(async () => {
@@ -76,10 +94,10 @@ export function App() {
       "mod+enter": toggleSession,
       "mod+p": togglePause,
       "mod+,": () => setSettingsOpen(true),
-      "mod+j": () => setCopilotOpen((open) => !open),
+      "mod+j": toggleCopilot,
       "mod+t": toggleAlwaysOnTop,
     }),
-    [toggleSession, togglePause, toggleAlwaysOnTop],
+    [toggleSession, togglePause, toggleAlwaysOnTop, toggleCopilot],
   );
   useShortcuts(shortcuts);
 
@@ -92,16 +110,49 @@ export function App() {
         <NoiseTexture className="-z-10 rounded-[inherit] opacity-[0.07] dark:opacity-[0.09]" aria-hidden />
         <TitleBar
           canStart={canStart}
-          copilotOpen={copilotOpen}
+          copilotOpen={mode !== "compact"}
           onToggleSession={toggleSession}
           onTogglePause={togglePause}
-          onToggleCopilot={() => setCopilotOpen((open) => !open)}
+          onToggleCopilot={toggleCopilot}
           onToggleAlwaysOnTop={toggleAlwaysOnTop}
           onOpenSettings={() => setSettingsOpen(true)}
         />
-        <TranscriptView emptyState={<EmptyState />} />
-        {copilotOpen && <CopilotPanel enabled={settings?.copilotEnabled ?? false} />}
-        <Notices error={actionError ?? failure ?? appError} />
+        <div className="flex shrink-0 items-center justify-between gap-2 px-2 text-[11px] text-ink-muted">
+          <span>
+            {state.state === "running"
+              ? "Listening"
+              : state.state === "paused"
+                ? "Paused"
+                : state.state === "starting"
+                  ? "Starting capture…"
+                  : state.state === "stopping"
+                    ? "Stopping capture…"
+                    : "Audio off"}{" "}
+            · {mode === "compact" ? "Subtitles" : mode === "reading" ? "Reading" : "Preparation"}
+          </span>
+          <div className="flex gap-1">
+            {pinnedReply && mode !== "reading" && (
+              <Button size="sm" className="text-[11px]" onClick={() => useCopilot.getState().setMode("reading")}>
+                Pinned answer
+              </Button>
+            )}
+            <Button size="sm" className="text-[11px]" onClick={toggleCopilot}>
+              {mode === "compact" ? "Open copilot" : "Back to subtitles"}
+            </Button>
+          </div>
+        </div>
+        <div
+          className={
+            mode === "reading" ? "hidden" : `flex min-h-0 flex-1 flex-col ${mode === "expanded" ? "min-h-24" : ""}`
+          }
+        >
+          <TranscriptView emptyState={<EmptyState />} />
+        </div>
+        {mode === "expanded" && (
+          <CopilotPanel enabled={settings?.copilotEnabled ?? false} onOpenSettings={() => setSettingsOpen(true)} />
+        )}
+        {mode === "reading" && <PinnedReply />}
+        <Notices error={actionError ?? resizeError ?? failure ?? appError} />
         <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       </main>
     </TooltipProvider>

@@ -15,7 +15,8 @@
  * cannot blur what lies behind the window by itself.
  */
 @theme {
-  --font-sans: "Google Sans Flex", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
+  --font-sans:
+    "Google Sans Flex", "Segoe UI Variable Text", "Segoe UI", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter",
     "Noto Sans", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", "SF Mono", "JetBrains Mono", ui-monospace, monospace;
 
@@ -162,6 +163,21 @@ body {
 
 .selectable {
   user-select: text;
+}
+
+.input-field {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  user-select: text;
+}
+
+.input-field::placeholder {
+  color: var(--ink-faint);
 }
 
 :focus-visible {

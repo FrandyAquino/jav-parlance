@@ -18,6 +18,12 @@ const COMMANDS: &[&str] = &[
     "list_history",
     "history_transcript",
     "delete_history",
+    "list_project_profiles",
+    "save_project_profile",
+    "delete_project_profile",
+    "set_active_project_profile",
+    "ask_copilot",
+    "cancel_copilot",
 ];
 
 fn main() {

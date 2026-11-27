@@ -23,7 +23,10 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const save = useApp((s) => s.saveSettings);
   if (!settings) return null;
 
-  const languageOptions = LANGUAGES.map((l) => ({ value: l.code, label: l.name }));
+  const languageOptions = LANGUAGES.map((l) => ({
+    value: l.code,
+    label: l.name,
+  }));
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -68,8 +71,8 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
                 onChange={(translationEnabled) => void save({ translationEnabled })}
               />
               <SwitchRow
-                label="Copilot"
-                description="Suggests replies when someone asks you a question."
+                label="Automatic copilot"
+                description="Suggests replies to spoken questions. Written questions remain available when this is off."
                 checked={settings.copilotEnabled}
                 onChange={(copilotEnabled) => void save({ copilotEnabled })}
               />

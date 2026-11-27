@@ -20,6 +20,7 @@ cost money per minute, or do not work offline.
    user's language.
 4. Works with any meeting app: system audio, one application, a microphone, or one browser tab.
 5. Fully local after a one-time model download; no account; no paid APIs.
+6. Answer written technical questions without audio, using reusable local project context and an optional user idea.
 
 ## Non-goals (for now)
 
@@ -32,6 +33,10 @@ Meeting summaries and action items, speaker diarization by name, cloud sync, mob
 - Text appears while people speak (partial), then settles (final) without jumping.
 - Keyboard-first: start/stop, pause, copilot, settings and pin all have shortcuts.
 - Clear, actionable errors (missing model, permission denied, device lost) instead of silent failure.
+- Compact subtitles, expanded preparation and a pinned reading view share one window and preserve the active session.
+- Automatic suggestions never replace a manual draft/result or a pinned answer. Replies identify their project context and revision.
+- Named project profiles can be created, edited, selected or deleted locally. Context is captured per request; later changes do not rewrite previous answers.
+- The written-question composer chooses an explicit reply language and keeps inputs when generation fails or context is too large.
 
 ## Quality targets (CPU-only laptop, default models)
 
@@ -47,3 +52,4 @@ Meeting summaries and action items, speaker diarization by name, cloud sync, mob
 
 Audio never written to disk; transcripts stored only with explicit opt-in; no telemetry; capture never starts
 without a user action. See `docs/security.md`.
+Saving a project profile is separate from opting into meeting history. Written questions, ideas and replies remain in memory for the app run.

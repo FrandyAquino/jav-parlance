@@ -22,7 +22,13 @@ export function shortcutKey(event: Pick<KeyboardEvent, "key" | "ctrlKey" | "meta
 export function useShortcuts(shortcuts: ShortcutMap): void {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const handler = shortcuts[shortcutKey(event)];
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
+      const key = shortcutKey(event);
+      const editing =
+        event.target instanceof Element && event.target.closest("input, textarea, [contenteditable], [role='textbox']");
+      if (editing && (key === "mod+enter" || key === "mod+p")) return;
+      const handler = shortcuts[key];
       if (!handler) return;
       event.preventDefault();
       handler();

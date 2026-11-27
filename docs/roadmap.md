@@ -19,6 +19,7 @@ Last updated: 2026-11-25.
 | Linux capture (pactl/parec) | Compiles for Linux | Cross `cargo check`; never run |
 | macOS capture and desktop | Verified on Apple Silicon | System/app/mic probes, live ASR/translation, universal app, Cmd+Q history flush; see [Mac evidence](benchmarks/2026-11-25-macos.md) |
 | macOS ScreenCaptureKit fallback (13.3–14.1) | Implemented, runtime unverified | Availability-guarded native adapter; needs older OS acceptance |
+| Adaptive window, local project profiles and written copilot | Implemented locally; native flow exercised on Apple Silicon | [Contextual copilot evidence](benchmarks/2026-11-25-adaptive-copilot.md); Windows/Linux native acceptance remains unrun for this change |
 
 ## Milestones
 
@@ -72,7 +73,7 @@ Last updated: 2026-11-25.
       the Windows discovery file, frame `sequence` unchecked.
 - [ ] Bridge relay locks a mutex per frame and WASAPI buffers may grow: capture paths are not strictly
       allocation/lock-free yet.
-- [ ] History commands run SQLite synchronously on the command thread; copilot/history queues are unbounded.
+- [ ] History commands run SQLite synchronously on the command thread; the history queue is unbounded. Copilot now uses bounded ingress and one active/latest pending request.
 - [x] Pinned official runtimes for macOS x64 and ARM Windows/Linux added.
 - [x] Primary microphone selection, Cmd labels on Mac, typed cancellation without an error toast.
 - [ ] Settings write errors map to `InvalidRequest`.
@@ -84,6 +85,18 @@ Last updated: 2026-11-25.
 - History titles are timestamps; renaming is not implemented.
 - The desktop crate has no Rust unit tests (`test = false`) because Windows test executables lack the
   Common Controls manifest Tauri needs; its logic is thin wiring covered through the core crates.
+
+## Adaptive window and contextual copilot — 2026-11-25
+
+- One window switches between compact subtitles, expanded preparation and a frozen reading view; session and manual drafts survive mode changes.
+- Written questions run independently of capture and the automatic-suggestions setting, with explicit reply language and an optional idea.
+- Local text profiles have stable identities/revisions, atomic persistence and per-request snapshots; saving profiles never enables meeting history.
+- Manual inference takes priority over automatic suggestions; ASR hands off through a bounded queue without waiting for copilot event delivery.
+- Stream interruption and token-limit endings are visible failures. Capture shortcuts ignore editable fields and dialogs; Command/Ctrl+Enter submits from either composer field.
+- Native macOS checks exercised saved-profile restart, attribution after editing, written replies with audio off, live system capture/translation alongside a manual query, and pinned reading while capture continued.
+- The 2B model gave one imprecise general cache-aside explanation and initially confused an undocumented TTL with an absent setting. Prompt wording was tightened and the subsequent native result acknowledged that the TTL was unknown; general technical correctness is not guaranteed by these checks.
+
+Implementation and review remain uncommitted by user request. See [ADR 0012](adr/0012-contextual-copilot-and-adaptive-window.md) and the linked evidence for validation scope.
 
 ## Spanish audio and repeated translation correction — 2026-11-25
 

@@ -18,5 +18,6 @@ not merely that one provisional generation has completed. Retained previews are 
 capacity plus the active partial. Intentional preemption does not produce a failure notice.
 
 **Consequences.** One model in memory instead of two, which matters on 8–16 GB machines. Translation and copilot
-share the server through two parallel slots (`--parallel 2`), so a long copilot reply cannot block translation;
-superseded copilot generations are cancelled. There is no explicit priority scheduling yet (roadmap M4).
+share the server through two parallel slots (`--parallel 2`). The app-owned copilot serializes its own generations,
+with manual questions ahead of automatic suggestions ([ADR 0012](0012-contextual-copilot-and-adaptive-window.md)).
+There is no global priority scheduler, so shared hardware contention still requires workload measurement.

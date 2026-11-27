@@ -3,6 +3,7 @@
 //! hand-writes a contract that could drift from Rust.
 
 pub mod app;
+pub mod copilot;
 pub mod error;
 pub mod events;
 pub mod models;
@@ -10,6 +11,7 @@ pub mod native_messaging;
 pub mod settings;
 
 pub use app::{AppInfo, CaptureSupport};
+pub use copilot::{AskCopilotRequest, ProjectProfiles, SaveProjectProfileRequest};
 pub use error::{ErrorCode, IpcError};
 pub use events::{Notice, NoticeLevel, SessionEvent, StartSessionRequest};
 pub use models::{ModelDescriptor, ModelKind, ModelProgress, ModelStatus};

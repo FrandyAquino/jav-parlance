@@ -30,9 +30,11 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(|app| {
-            let state = state::AppState::initialize()?;
-            let settings = state.settings.get();
-            tauri::async_runtime::block_on(async { state.intelligence.reconcile(&settings) });
+            let state = tauri::async_runtime::block_on(async {
+                let state = state::AppState::initialize()?;
+                state.intelligence.reconcile(&state.settings.get());
+                Ok::<_, Box<dyn std::error::Error>>(state)
+            })?;
             app.manage(state);
             Ok(())
         })
@@ -53,6 +55,12 @@ pub fn run() {
             commands::list_history,
             commands::history_transcript,
             commands::delete_history,
+            commands::list_project_profiles,
+            commands::save_project_profile,
+            commands::delete_project_profile,
+            commands::set_active_project_profile,
+            commands::ask_copilot,
+            commands::cancel_copilot,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Parlance")

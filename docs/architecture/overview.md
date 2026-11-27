@@ -14,7 +14,7 @@ flowchart LR
   host -- "TCP 127.0.0.1 + token" --> core
   core -- "child process, HTTP 127.0.0.1 + API key" --> llama[llama-server sidecar]
   core -- "HTTPS, user-initiated" --> hf[(Hugging Face / GitHub releases)]
-  core --> disk[(settings.json · models/ · history.db opt-in)]
+  core --> disk[(settings.json · profiles.json · models/ · history.db opt-in)]
 ```
 
 - Raw audio never crosses into the webview. The UI receives only typed events (ADR 0001).
@@ -32,8 +32,8 @@ flowchart LR
 | `crates/session` | `SessionController` (state machine owner), DSP and ASR threads, `SpeechEngine` / `SegmentListener` / `EventSink` ports | Talk to LLMs or storage directly (only via listeners) |
 | `crates/llm` | `LanguageModel` port, `LlamaServer` supervisor, SSE client, prompt isolation | Depend on any Parlance crate |
 | `crates/translation` | `Translator` port, `LlmTranslator`, `TranslationWorker` listener | Block the ASR thread |
-| `crates/copilot` | Question detector, suggestion policy, rolling context, `CopilotWorker` listener | Block the ASR thread |
-| `crates/storage` | Opt-in SQLite history, `HistoryRecorder` listener with its own writer thread | Store audio |
+| `crates/copilot` | App-owned `CopilotService`, session adapters, bounded contextual requests and reply generation | Block the ASR thread |
+| `crates/storage` | Opt-in SQLite history and independent local project profiles | Store audio |
 | `crates/models` | Pinned catalog (URL, size, SHA-256), verified download, `ModelStore` | Load models |
 | `apps/desktop/src-tauri` | Composition root, Tauri commands, event hub, settings, LLM lifecycle (`intelligence.rs`) | Contain business logic |
 | `apps/cli` | Headless developer tool and benchmarks | — |
@@ -79,9 +79,9 @@ Allowed directions:
 | `parlance-dsp` | OS thread | `RunningPipeline` | Session |
 | `parlance-asr` | OS thread | `RunningPipeline` | Session |
 | Translation worker | Tokio task | `TranslationWorker` | Session |
-| Copilot dispatcher + one task per suggestion | Tokio tasks | `CopilotWorker` | Session |
+| Copilot worker, one active request + latest automatic pending | Tokio task | `CopilotService` | App; session-scoped audio adapter |
 | `parlance-history` | OS thread | `HistoryRecorder` (only if history is on) | Session |
-| LLM supervisor + log forwarders | Tokio tasks | `LlamaServer` | While translation or copilot is enabled and models are installed |
+| LLM supervisor + log forwarders | Tokio tasks | `LlamaServer` | While translation, automatic copilot or an explicit manual query needs the installed model |
 | `llama-server` | child process | `LlamaServer` (Windows Job Object; Unix lifetime-pipe guardian) | Same |
 | `parlance-bridge` (accept) + `parlance-bridge-conn` (one per tab) | OS threads | `BridgeBackend` | App / per connection |
 | Model downloads | Tokio tasks (command futures) | `download_model` | Per download |
@@ -108,11 +108,13 @@ flowchart LR
   dsp -->|Level, Notice| hub
   subgraph listeners[SegmentListeners]
     tw[TranslationWorker<br/>queue 64] --> llm[llama-server]
-    cw[CopilotWorker] --> llm
+    cw[Copilot session adapter] --> cs[Application CopilotService]
+    cs --> llm
     hr[HistoryRecorder] --> db[(SQLite)]
   end
   tw -->|Translation| hub
-  cw -->|Suggestion| hub
+  cs -->|Suggestion| hub
+  manual[Written question + profile snapshot] --> cs
 ```
 
 Per utterance:

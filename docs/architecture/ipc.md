@@ -30,6 +30,12 @@ Errors are always `IpcError { code: ErrorCode, message }`.
 | `list_history` | — | `HistoryEntry[]` (latest 50) | `storage` |
 | `history_transcript` | `id: number` | `HistoryLine[]` | `storage` |
 | `delete_history` | `id: number` | `null` | `storage` |
+| `list_project_profiles` | — | `ProjectProfiles { profiles, activeProfileId }` | `storage` |
+| `save_project_profile` | `request: { id: string or null, name, content }` | Updated `ProjectProfiles` | `invalidRequest`, `storage` |
+| `delete_project_profile` | `id: string` | Updated `ProjectProfiles`; deleting active clears selection | `invalidRequest`, `storage` |
+| `set_active_project_profile` | `id: string or null` | Updated `ProjectProfiles` | `invalidRequest`, `storage` |
+| `ask_copilot` | `request: { requestId, question, idea, replyLanguage, userLanguage, profileId }` | `null` after admission; result via suggestion events | `invalidRequest`, `contextTooLarge`, `modelMissing`, `storage` |
+| `cancel_copilot` | `requestId: string` | `null`; idempotent cancellation | — |
 
 Error mapping lives in `src-tauri/src/error.rs` (`from_capture`, `from_session`, `from_download`).
 
@@ -53,12 +59,15 @@ One channel per window (`EventHub` keeps the latest subscriber). `SessionEvent` 
 | `level` | `level: AudioLevel { rmsDb, peakDb }` | DSP thread | 20 Hz while capturing (also while paused) |
 | `transcript` | `segment: TranscriptSegment { id, revision, stableText, unstableText, language, startMs, endMs, stability }` | ASR thread | Each partial pass (~1/s per open utterance) and each final |
 | `translation` | `translation: Translation { segmentId, sourceRevision, targetLanguage, text, isFinal }` | Translation worker | Per streamed token, then final |
-| `suggestion` | `suggestion: Suggestion { id, questionSegmentId, question, speakerLanguage, userLanguage, replyInSpeakerLanguage, replyInUserLanguage, isComplete }` | Copilot | Per token (full snapshot each time) |
+| `suggestion` | `suggestion: Suggestion` including request identity, origin, nullable segment, profile attribution, status/error and bilingual text | App-owned copilot | Admission, streamed tokens, terminal result |
 | `languageDetected` | `language: string` | ASR thread | When a final segment's language differs from the previous one |
 | `notice` | `notice: { level: "info" \| "warning" \| "error", message }` | Anyone | Rare |
 
 UI rules (`apps/desktop/src/store/session.ts`): replace segments by `id` when `revision` is newer; drop finals with
-empty text; keep the translation with the highest `sourceRevision`; cap at 1 500 rows, 8 suggestions, 3 notices.
+empty text; keep the translation with the highest `sourceRevision`; cap at 1 500 rows and 3 notices.
+Suggestion events go directly to `store/copilot.ts`, which retains the latest automatic result, the matching manual result and a frozen pinned copy. Terminal results reject later updates for that identity. Starting capture never resets this work store.
+
+Manual request IDs are created before invocation, so events arriving before command acknowledgement remain correlated. `questionSegmentId` is null for written questions. The result's `profile` contains the captured ID, name and revision; `conversationTruncated` discloses omitted conversation. `status` is queued, generating, complete, failed or cancelled; `isComplete` is true only for complete.
 
 Model download progress uses a separate per-call `Channel<ModelProgress>` (about every MiB, then `done`).
 
@@ -81,6 +90,7 @@ Model download progress uses a separate per-call `Channel<ModelProgress>` (about
 - `capabilities/default.json` applies to window `main` only and grants:
   - `core:event:default`
   - window chrome: `start-dragging`, `set-always-on-top`, `is-always-on-top`, `minimize`, `close`, `toggle-maximize`
+  - adaptive geometry: `inner-size`, `scale-factor`, `current-monitor`, `outer-position`, `set-size`, `set-position`
   - one `allow-<command>` per Parlance command.
 - No filesystem, shell, HTTP or dialog plugin is enabled. Anything not granted is rejected by Tauri.
 

@@ -3,4 +3,4 @@
 /**
  * Stable, machine-readable error categories the UI can map to actions.
  */
-export type ErrorCode = "cancelled" | "invalidRequest" | "invalidState" | "modelMissing" | "modelCorrupt" | "captureUnavailable" | "permissionDenied" | "inferenceFailed" | "storage" | "network" | "internal";
+export type ErrorCode = "cancelled" | "invalidRequest" | "contextTooLarge" | "invalidState" | "modelMissing" | "modelCorrupt" | "captureUnavailable" | "permissionDenied" | "inferenceFailed" | "storage" | "network" | "internal";

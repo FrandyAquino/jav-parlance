@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-copilot"
+description = "Enables the cancel_copilot command without any pre-configured scope."
+commands.allow = ["cancel_copilot"]
+
+[[permission]]
+identifier = "deny-cancel-copilot"
+description = "Denies the cancel_copilot command without any pre-configured scope."
+commands.deny = ["cancel_copilot"]

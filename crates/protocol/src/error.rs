@@ -8,6 +8,7 @@ use ts_rs::TS;
 pub enum ErrorCode {
     Cancelled,
     InvalidRequest,
+    ContextTooLarge,
     InvalidState,
     ModelMissing,
     ModelCorrupt,

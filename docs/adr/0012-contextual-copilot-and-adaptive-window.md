@@ -1,0 +1,13 @@
+# 0012 — Application-owned copilot and adaptive window
+
+**Context.** The session-owned copilot could only answer detected speech. Its newest suggestion replaced the previous one, which is unsuitable while a user edits a written question or reads a chosen reply. Technical replies also need user-supplied project facts that persist independently of meeting history.
+
+**Decision.** `CopilotService` owns one application-lifetime worker. Audio sessions attach generation-scoped listeners; manual requests use the same service without starting capture. One active job and one replaceable automatic pending job bound inference work. A manual request supersedes the active job, while automatic questions wait behind manual work. Stopping capture cancels automatic work only. Model replacement and application shutdown cancel all requests.
+
+Each admitted job captures question, idea, languages, recent conversation and an immutable project snapshot. Results carry request identity, origin, profile name/revision and an explicit terminal state. Cancellation covers model readiness, HTTP and streaming; callbacks cannot replace a terminal result. Unexpected stream endings and token-limit endings are failures, including during translation of the reply.
+
+`ProfileRepository` in storage persists named text profiles and the active selection in a versioned JSON document. Mutations write a synced temporary file and replace the original before publishing the new memory state. Snapshot readers never hold a filesystem lock. Corrupt documents are preserved and reported. Profiles do not enable transcript history, and neither manual questions nor replies are persisted.
+
+The renderer keeps draft, manual result, latest automatic result and a frozen chosen reply outside the audio-session store. Compact, expanded and reading views share one native window; the transcript stays mounted to retain its reading position. Resizing is serialized and remembers per-mode sizes for the current run only. Capture shortcuts do not fire from editable fields.
+
+**Consequences.** Existing translation and copilot share the two local LLM slots. Copilot concurrency is bounded but there is no global inference-priority scheduler; real workload measurements remain necessary. Full project facts, question and idea must fit the conservative 3000-byte prompt budget, with a 160-token reply allowance. Only recent conversation may be omitted, and its omission is surfaced. Profiles may store up to 12000 bytes, so a saved profile is not a promise that it fits every request. The model can still make technical mistakes; prompt and state tests are not evidence of answer correctness.
