@@ -38,6 +38,12 @@ speech recognition and language inference on your own hardware.
   by side in a floating, always-on-top desktop window.
 - **Get help replying.** A question-aware copilot suggests responses in the
   speaker's language and yours. You decide what to say.
+- **Prepare answers without a call.** Type or paste a question, add an optional
+  draft idea, and ask the same local copilot without starting audio capture.
+- **Bring your project context.** Save local profiles describing your stack and
+  team decisions. Responses retain the profile attribution used to generate them.
+- **Keep an answer in view.** Switch between compact subtitles, preparation, and
+  a pinned reading view without restarting capture or replacing your chosen reply.
 - **Choose your audio source.** Capture system audio, an application, or a
   microphone. A Chromium tab-capture extension is also implemented; see the
   verification limits below.
@@ -117,6 +123,7 @@ requires build 20348 or later. See the platform guides for exact requirements.
 
 Evidence: [Windows](docs/benchmarks/2026-11-24-windows-baseline.md) ·
 [macOS](docs/benchmarks/2026-11-25-macos.md) ·
+[Contextual copilot](docs/benchmarks/2026-11-25-adaptive-copilot.md) ·
 [Browser extension setup](apps/extension/README.md).
 
 ## Privacy and local models

@@ -1,5 +1,6 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { SessionState } from "./bindings/SessionState";
 import { CopilotPanel } from "./components/CopilotPanel";
 import { EmptyState } from "./components/EmptyState";
 import { Notices } from "./components/Notices";
@@ -18,6 +19,15 @@ import { dispatchSessionEvent, isActive, useSession } from "./store/session";
 import { useCopilot } from "./store/copilot";
 import { useProfiles } from "./store/profiles";
 import { Button } from "./components/ui/button";
+
+const CAPTURE_LABELS: Record<SessionState["state"], string> = {
+  idle: "Audio off",
+  starting: "Starting capture…",
+  running: "Listening",
+  paused: "Paused",
+  stopping: "Stopping capture…",
+  failed: "Audio off",
+};
 
 export function App() {
   const load = useApp((s) => s.load);
@@ -119,15 +129,7 @@ export function App() {
         />
         <div className="flex shrink-0 items-center justify-between gap-2 px-2 text-[11px] text-ink-muted">
           <span>
-            {state.state === "running"
-              ? "Listening"
-              : state.state === "paused"
-                ? "Paused"
-                : state.state === "starting"
-                  ? "Starting capture…"
-                  : state.state === "stopping"
-                    ? "Stopping capture…"
-                    : "Audio off"}{" "}
+            {CAPTURE_LABELS[state.state]}{" "}
             · {mode === "compact" ? "Subtitles" : mode === "reading" ? "Reading" : "Preparation"}
           </span>
           <div className="flex gap-1">

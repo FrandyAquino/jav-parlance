@@ -383,7 +383,6 @@ impl Inner {
         if state.closed {
             return;
         }
-        // Release the handoff lock before any prompt construction or event delivery.
         let inputs = {
             let mut incoming = self.incoming.lock().unwrap_or_else(|p| p.into_inner());
             incoming.drain(..).collect::<Vec<_>>()

@@ -53,6 +53,13 @@ pnpm test
 pnpm --filter @parlance/extension build
 ```
 
+Type checking and builds use TypeScript 7 through the `typescript-compiler` npm
+alias. ESLint uses the TypeScript 6 API through the `typescript` compatibility
+alias, following [Microsoft's side-by-side migration guidance](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0).
+Keep both aliases: TypeScript 7.0 does not expose the programmatic API ESLint needs.
+The compiler alias deliberately avoids `@typescript/native`, which current
+typescript-eslint reserves for its optional TypeScript 7.1 API integration.
+
 Rust tests regenerate TypeScript contracts in `apps/desktop/src/bindings`. Include
 changed and newly generated contracts in the same PR as their Rust definitions.
 When changing dependencies intentionally, update and commit the relevant lockfile.

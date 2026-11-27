@@ -146,9 +146,8 @@ impl Observations {
 fn metric(values: &[f64]) -> Value {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    // Nearest-rank p95; empty samples stay null, never zero or invented latency.
-    let p95 = (!sorted.is_empty()).then(|| sorted[(sorted.len() as f64 * 0.95).ceil() as usize - 1]);
-    json!({"sample_count": values.len(), "p95_ms": p95, "samples_ms": values})
+    let nearest_rank_p95 = (!sorted.is_empty()).then(|| sorted[(sorted.len() as f64 * 0.95).ceil() as usize - 1]);
+    json!({"sample_count": values.len(), "p95_ms": nearest_rank_p95, "samples_ms": values})
 }
 
 fn load_wav(path: &Path) -> anyhow::Result<ReplayClip> {
@@ -334,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
     if audio_seconds < MIN_AUDIO_SECONDS || args.repetitions == 0 {
         bail!("requires >=120 seconds of audio and at least one repetition");
     }
-    let mut hardware = sysinfo::System::new_all();
+    let mut hardware = sysinfo::System::new_all().context("initialize hardware metrics")?;
     hardware.refresh_memory();
     println!(
         "{}",
@@ -342,7 +341,7 @@ async fn main() -> anyhow::Result<()> {
             "type":"metadata", "scope":"model-backed real-time replay; not Tauri or live-device acceptance",
             "wav":wav, "audio_seconds":audio_seconds, "repetitions":args.repetitions,
             "speech_model":args.speech_model, "llm_model":args.llm_model,
-            "os":sysinfo::System::long_os_version(), "cpu":hardware.cpus().first().map(|cpu| cpu.brand()),
+            "os":sysinfo::System::long_os_version().ok(), "cpu":hardware.cpus().first().map(|cpu| cpu.brand()),
             "logical_cpus":hardware.cpus().len(), "memory_bytes":hardware.total_memory(),
             "llm_threads":config.threads, "llm_parallel_slots":config.parallel,
             "latency_definition":"publication instant - start-return ready instant - final segment end_ms; 1x replay",
