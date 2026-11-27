@@ -3004,7 +3004,7 @@ dependencies = [
  "hex",
  "parlance-protocol",
  "reqwest 0.12.28",
- "sha2 0.10.9",
+ "sha2 0.11.1",
  "tar",
  "tempfile",
  "thiserror 2.0.21",
