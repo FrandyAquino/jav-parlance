@@ -20,6 +20,7 @@ env:
 jobs:
   rust:
     name: Rust (${{ matrix.os }})
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -29,6 +30,8 @@ jobs:
       # Keep LF endings so regenerated bindings compare cleanly on Windows.
       - run: git config --global core.autocrlf input
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -61,10 +64,10 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       # cargo test regenerates the ts-rs contracts; committed bindings must match.
       - name: Check generated bindings
@@ -81,8 +84,11 @@ jobs:
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Version comes from the root package.json `packageManager` field.
       - uses: pnpm/action-setup@v4
@@ -113,6 +119,7 @@ jobs:
   bundles:
     name: Installer (${{ matrix.os }})
     needs: [rust, frontend]
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -120,6 +127,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: pnpm/action-setup@v4
@@ -150,9 +159,31 @@ jobs:
         with:
           name: parlance-${{ runner.os }}
           if-no-files-found: error
+          retention-days: 7
           path: |
             target/release/bundle/**/*.deb
             target/release/bundle/**/*.AppImage
             target/release/bundle/**/*.msi
             target/release/bundle/**/*.exe
             target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  required:
+    # Stable name for branch protection; skipped/cancelled dependencies must fail.
+    name: CI required
+    if: ${{ always() }}
+    needs: [rust, frontend, bundles]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check to pass
+        env:
+          RUST_RESULT: ${{ needs.rust.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          BUNDLES_RESULT: ${{ needs.bundles.result }}
+        run: |
+          for result in "$RUST_RESULT" "$FRONTEND_RESULT" "$BUNDLES_RESULT"; do
+            if [ "$result" != success ]; then
+              echo "::error::A required CI job failed, was cancelled, or was skipped."
+              exit 1
+            fi
+          done
