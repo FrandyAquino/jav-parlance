@@ -167,15 +167,25 @@ pub async fn start_session(state: State<'_, AppState>, request: StartSessionRequ
         writers.retain(|writer| !writer.is_finished());
         writers.push(completion);
     }
-    let events = record_translations(state.events.sink(), recorder.clone());
-    let mut listeners = state.intelligence.listeners(&settings, &events, state.active_profile_source());
-    listeners.extend(recorder.map(|r| r as Arc<dyn SegmentListener>));
+    let events = record_translations(state.events.session_sink(), recorder.clone());
+    let listeners =
+        session_listeners(state.intelligence.listeners(&settings, &events, state.active_profile_source()), recorder);
     let config = SessionConfig::new(sources, settings.source_language.clone());
     let result = state.controller.start(config, listeners).await;
     if result.is_err() {
         state.intelligence.stop_session();
     }
     result.map_err(from_session)
+}
+
+fn session_listeners(
+    mut listeners: Vec<Arc<dyn SegmentListener>>,
+    recorder: Option<Arc<HistoryRecorder>>,
+) -> Vec<Arc<dyn SegmentListener>> {
+    if let Some(recorder) = recorder {
+        listeners.insert(0, recorder as Arc<dyn SegmentListener>);
+    }
+    listeners
 }
 
 /// Tees translation events into the history recorder when history is on.
@@ -282,4 +292,92 @@ pub fn pause_session(state: State<'_, AppState>) -> CommandResult<()> {
 #[tauri::command]
 pub fn resume_session(state: State<'_, AppState>) -> CommandResult<()> {
     state.controller.resume().map_err(from_session)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::EventHub;
+    use parlance_domain::{LanguageCode, SegmentId, Stability, TranscriptSegment, Translation};
+    use std::sync::Mutex;
+    use tauri::ipc::InvokeResponseBody;
+
+    fn segment() -> TranscriptSegment {
+        TranscriptSegment {
+            id: SegmentId(1),
+            revision: 1,
+            stable_text: "Hello".into(),
+            unstable_text: String::new(),
+            language: Some(LanguageCode::new("en").unwrap()),
+            start_ms: 0,
+            end_ms: 1000,
+            stability: Stability::Final,
+        }
+    }
+
+    fn translation(text: &str) -> Translation {
+        Translation {
+            segment_id: SegmentId(1),
+            source_revision: 1,
+            target_language: LanguageCode::new("es").unwrap(),
+            text: text.into(),
+            is_final: true,
+        }
+    }
+
+    struct ImmediateTranslation(EventSink);
+    impl SegmentListener for ImmediateTranslation {
+        fn on_segment(&self, _: &TranscriptSegment) {
+            (self.0)(SessionEvent::Translation { translation: translation("Hola") });
+        }
+        fn on_session_end(&self) {}
+    }
+
+    #[test]
+    fn history_records_segment_before_synchronous_derivative() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("history.db");
+        let recorder = Arc::new(HistoryRecorder::start(database.clone(), "es".into()));
+        let completion = recorder.take_completion().unwrap();
+        let sink = record_translations(Arc::new(|_| {}), Some(Arc::clone(&recorder)));
+        let listeners = session_listeners(vec![Arc::new(ImmediateTranslation(sink))], Some(recorder));
+        for listener in &listeners {
+            listener.on_segment(&segment());
+        }
+        drop(listeners);
+        completion.join().unwrap();
+        let store = HistoryStore::open(&database).unwrap();
+        let session = store.list(1).unwrap().remove(0);
+        assert_eq!(store.transcript(session.id).unwrap()[0].translation.as_deref(), Some("Hola"));
+    }
+
+    #[test]
+    fn previous_session_translation_is_filtered_from_ui_but_saved_to_its_history() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("history.db");
+        let recorder = Arc::new(HistoryRecorder::start(database.clone(), "es".into()));
+        let completion = recorder.take_completion().unwrap();
+        recorder.on_segment(&segment());
+        let hub = Arc::new(EventHub::default());
+        let received = Arc::new(Mutex::new(Vec::<SessionEvent>::new()));
+        let output = Arc::clone(&received);
+        hub.subscribe(Channel::new(move |body| {
+            let InvokeResponseBody::Json(json) = body else { panic!("expected JSON") };
+            output.lock().unwrap().push(serde_json::from_str(&json).unwrap());
+            Ok(())
+        }));
+        let old = record_translations(hub.session_sink(), Some(recorder));
+        let current = hub.session_sink();
+        current(SessionEvent::Translation { translation: translation("New meeting") });
+        old(SessionEvent::Translation { translation: translation("Old meeting") });
+        drop(old);
+        completion.join().unwrap();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![SessionEvent::Translation { translation: translation("New meeting") }]
+        );
+        let store = HistoryStore::open(&database).unwrap();
+        let session = store.list(1).unwrap().remove(0);
+        assert_eq!(store.transcript(session.id).unwrap()[0].translation.as_deref(), Some("Old meeting"));
+    }
 }

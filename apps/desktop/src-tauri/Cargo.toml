@@ -9,7 +9,7 @@ license.workspace = true
 name = "parlance_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 # Windows test executables lack the Common Controls v6 manifest Tauri needs;
-# this crate is pure wiring, exercised by the core crates' tests and E2E runs.
+# Linux CI runs the event/history wiring tests explicitly with `--lib`.
 test = false
 doctest = false
 
@@ -44,6 +44,9 @@ tauri = { version = "2", features = [] }
 cuda = ["parlance-asr/cuda"]
 metal = ["parlance-asr/metal"]
 vulkan = ["parlance-asr/vulkan"]
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

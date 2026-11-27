@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use parlance_domain::{LanguageCode, SegmentId, TranscriptSegment, Translation};
 use parlance_protocol::{Notice, SessionEvent};
@@ -14,6 +15,8 @@ const QUEUE: usize = 64;
 const CONTEXT_SENTENCES: usize = 2;
 /// Pending finals plus the one active partial bound retained display previews.
 const MAX_PREVIEWS: usize = QUEUE + 1;
+/// Finish queued finals while leaving five seconds of the desktop's 15 s history drain for recorder I/O.
+const FINAL_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct Job {
@@ -100,6 +103,7 @@ pub struct TranslationWorker {
     partial: Arc<LatestPartial>,
     events: EventSink,
     warned_overflow: AtomicBool,
+    stop: CancellationToken,
 }
 
 impl std::fmt::Debug for TranslationWorker {
@@ -121,8 +125,29 @@ impl TranslationWorker {
             previews: Mutex::new(BTreeMap::new()),
             failed: false,
         };
-        tokio::spawn(task.run(rx, Arc::clone(&partial), CancellationToken::new()));
-        Arc::new(Self { finals: Mutex::new(Some(tx)), partial, events, warned_overflow: AtomicBool::new(false) })
+        let stop = CancellationToken::new();
+        let stopped = stop.clone();
+        let task_partial = Arc::clone(&partial);
+        let drain_events = Arc::clone(&events);
+        // Session end runs on the ASR OS thread, so install its async lifecycle here.
+        tokio::spawn(async move {
+            let cancel = CancellationToken::new();
+            let running = task.run(rx, task_partial, cancel.clone());
+            tokio::pin!(running);
+            tokio::select! {
+                _ = &mut running => return,
+                _ = stopped.cancelled() => {}
+            }
+            if tokio::time::timeout(FINAL_DRAIN_TIMEOUT, &mut running).await.is_err() {
+                cancel.cancel();
+                tracing::warn!("final translation drain timed out");
+                drain_events(SessionEvent::Notice {
+                    notice: Notice::warning("Stopped waiting for final translations; some lines may be incomplete."),
+                });
+                // Dropping the future also releases the sink if a translator ignores cancellation.
+            }
+        });
+        Arc::new(Self { finals: Mutex::new(Some(tx)), partial, events, warned_overflow: AtomicBool::new(false), stop })
     }
 }
 
@@ -148,12 +173,12 @@ impl SegmentListener for TranslationWorker {
         }
     }
 
-    /// Closing the queue lets the task finish what is queued, then exit. The
-    /// worker is deliberately not cancelled on drop: the ASR stage drops it
-    /// right after this call, and the last lines of a meeting must still be
-    /// translated.
+    /// Closing the queue drains healthy finals within a bounded grace period.
+    /// The ASR stage drops this worker immediately afterward; the task owns the
+    /// sink until the queued work finishes or its drain deadline expires.
     fn on_session_end(&self) {
         self.finals.lock().unwrap_or_else(|p| p.into_inner()).take();
+        self.stop.cancel();
     }
 }
 
@@ -299,6 +324,96 @@ mod tests {
     use async_trait::async_trait;
     use parlance_domain::Stability;
     use parlance_llm::OnToken;
+
+    struct StalledFinal {
+        entered: Notify,
+        token: Mutex<Option<CancellationToken>>,
+    }
+
+    #[async_trait]
+    impl Translator for StalledFinal {
+        async fn translate(
+            &self,
+            _: TranslationRequest,
+            cancel: CancellationToken,
+            _: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            *self.token.lock().unwrap() = Some(cancel);
+            self.entered.notify_one();
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn session_end_from_os_thread_bounds_stalled_final_and_releases_sink() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::clone(&received);
+        let sink: EventSink = Arc::new(move |event| output.lock().unwrap().push(event));
+        let retained = Arc::downgrade(&sink);
+        let translator = Arc::new(StalledFinal { entered: Notify::new(), token: Mutex::new(None) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        worker.on_segment(&segment(1, 1, "stalled", "en", Stability::Final));
+        translator.entered.notified().await;
+        tokio::time::pause();
+        std::thread::spawn(move || worker.on_session_end()).join().unwrap();
+        // Let the lifecycle task observe Stop before advancing its drain clock.
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_secs(12)).await;
+        tokio::task::yield_now().await;
+        assert!(retained.upgrade().is_none(), "a stalled final must release the recorder before its 15 s deadline");
+        assert!(translator.token.lock().unwrap().as_ref().unwrap().is_cancelled());
+        assert!(
+            received.lock().unwrap().iter().any(|event| matches!(
+                event, SessionEvent::Notice { notice } if notice.level == parlance_protocol::NoticeLevel::Warning
+            )),
+            "unfinished final translations must be reported to the user"
+        );
+    }
+
+    struct GatedFinal {
+        entered: tokio::sync::mpsc::UnboundedSender<String>,
+        permit: tokio::sync::Semaphore,
+    }
+
+    #[async_trait]
+    impl Translator for GatedFinal {
+        async fn translate(
+            &self,
+            request: TranslationRequest,
+            _: CancellationToken,
+            _: &OnToken<'_>,
+        ) -> Result<String, TranslationError> {
+            self.entered.send(request.text.clone()).unwrap();
+            self.permit.acquire().await.unwrap().forget();
+            Ok(request.text)
+        }
+    }
+
+    #[tokio::test]
+    async fn session_end_from_os_thread_drains_healthy_finals_and_releases_sink() {
+        let (sink, log) = recorder();
+        let retained = Arc::downgrade(&sink);
+        let (entered, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let translator = Arc::new(GatedFinal { entered, permit: tokio::sync::Semaphore::new(0) });
+        let worker = TranslationWorker::spawn(translator.clone(), LanguageCode::new("es").unwrap(), sink);
+        for id in 1..=3 {
+            worker.on_segment(&segment(id, 1, &format!("final {id}"), "en", Stability::Final));
+        }
+        std::thread::spawn(move || worker.on_session_end()).join().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            for id in 1..=3 {
+                assert_eq!(received.recv().await.unwrap(), format!("final {id}"));
+                translator.permit.add_permits(1);
+            }
+            while retained.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let finals: Vec<_> = log.lock().unwrap().iter().filter(|t| t.is_final).map(|t| t.text.clone()).collect();
+        assert_eq!(finals, ["final 1", "final 2", "final 3"]);
+    }
 
     struct Upper;
 

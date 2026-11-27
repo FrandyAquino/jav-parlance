@@ -49,6 +49,10 @@ impl<R: SpeechRecognizer> AsrWorker<R> {
         }
         let result = self.transcriber.flush();
         self.publish(result);
+        while self.transcriber.has_work() {
+            let result = self.transcriber.poll();
+            self.publish(result);
+        }
         for listener in &self.listeners {
             listener.on_session_end();
         }
@@ -72,9 +76,92 @@ impl<R: SpeechRecognizer> AsrWorker<R> {
             self.last_language = Some(language.clone());
             (self.events)(SessionEvent::LanguageDetected { language });
         }
+        (self.events)(SessionEvent::Transcript { segment: segment.clone() });
         for listener in &self.listeners {
             listener.on_segment(&segment);
         }
-        (self.events)(SessionEvent::Transcript { segment });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Mutex, mpsc};
+
+    use parlance_asr::{AsrError, DecodeOptions, Hypothesis, StreamingConfig};
+    use parlance_domain::{SegmentId, Stability};
+
+    struct ScriptedRecognizer(VecDeque<Result<&'static str, &'static str>>);
+
+    impl SpeechRecognizer for ScriptedRecognizer {
+        fn transcribe(&mut self, _audio: &[f32], _options: &DecodeOptions) -> Result<Hypothesis, AsrError> {
+            self.0
+                .pop_front()
+                .expect("one scripted result per decode")
+                .map(|text| Hypothesis { text: text.into(), language: None })
+                .map_err(|error| AsrError::Inference(error.into()))
+        }
+    }
+
+    struct RecordingListener(Arc<Mutex<Vec<String>>>);
+
+    impl SegmentListener for RecordingListener {
+        fn on_segment(&self, segment: &TranscriptSegment) {
+            self.0.lock().unwrap().push(format!("listener:{}", segment.id.0));
+        }
+
+        fn on_session_end(&self) {
+            self.0.lock().unwrap().push("end".into());
+        }
+    }
+
+    fn event_sink(log: Arc<Mutex<Vec<String>>>) -> EventSink {
+        Arc::new(move |event| match event {
+            SessionEvent::Transcript { segment } => log.lock().unwrap().push(format!("transcript:{}", segment.id.0)),
+            SessionEvent::Notice { .. } => log.lock().unwrap().push("error".into()),
+            _ => {}
+        })
+    }
+
+    #[test]
+    fn disconnect_drains_all_successes_and_errors_before_listener_shutdown() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let recognizer = ScriptedRecognizer(VecDeque::from([Ok("one"), Err("two"), Err("three"), Ok("four")]));
+        let mut transcriber = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+        for index in 0..4 {
+            transcriber.push(GateEvent::SpeechStarted { start_sample: index * 16_000 });
+            transcriber.push(GateEvent::Speech(vec![0.1; 16_000]));
+        }
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        AsrWorker::new(transcriber, rx, event_sink(log.clone()), vec![Arc::new(RecordingListener(log.clone()))]).run();
+        let log = log.lock().unwrap();
+        assert_eq!(log.iter().filter(|entry| entry.as_str() == "error").count(), 2);
+        let transcripts: Vec<_> =
+            log.iter().filter(|entry| entry.starts_with("transcript:")).map(String::as_str).collect();
+        assert_eq!(transcripts, ["transcript:1", "transcript:4"]);
+        assert_eq!(log.iter().filter(|entry| entry.starts_with("listener:")).count(), 2);
+        assert_eq!(log.last().map(String::as_str), Some("end"));
+    }
+
+    #[test]
+    fn transcript_is_published_before_derivative_listener_is_notified() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (_tx, rx) = mpsc::channel();
+        let transcriber = StreamingTranscriber::new(ScriptedRecognizer(VecDeque::new()), StreamingConfig::default());
+        let mut worker =
+            AsrWorker::new(transcriber, rx, event_sink(log.clone()), vec![Arc::new(RecordingListener(log.clone()))]);
+        worker.emit(TranscriptSegment {
+            id: SegmentId(7),
+            revision: 0,
+            stable_text: "ready".into(),
+            unstable_text: String::new(),
+            language: None,
+            start_ms: 0,
+            end_ms: 1000,
+            stability: Stability::Final,
+        });
+        assert_eq!(*log.lock().unwrap(), ["transcript:7", "listener:7"]);
     }
 }

@@ -84,6 +84,7 @@ pub struct VadGate {
     detector: Box<dyn VoiceActivityDetector>,
     config: GateConfig,
     pending: Vec<f32>,
+    ready: Vec<GateEvent>,
     pre_roll: VecDeque<f32>,
     in_speech: bool,
     silence_samples: usize,
@@ -111,6 +112,7 @@ impl VadGate {
             detector,
             config,
             pending: Vec::new(),
+            ready: Vec::new(),
             pre_roll: VecDeque::new(),
             in_speech: false,
             silence_samples: 0,
@@ -124,15 +126,33 @@ impl VadGate {
     }
 
     /// Consumes 16 kHz mono samples and returns the resulting boundary events.
+    /// On detector failure, resets and discards the remaining input. Valid
+    /// events and their closing boundary remain available to process or flush.
     pub fn process(&mut self, samples: &[f32]) -> Result<Vec<GateEvent>, VadError> {
         self.pending.extend_from_slice(samples);
         let frame_len = self.detector.frame_len();
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.ready);
         let mut offset = 0;
         while self.pending.len() - offset >= frame_len {
             let frame: Vec<f32> = self.pending[offset..offset + frame_len].to_vec();
             offset += frame_len;
-            let probability = self.detector.speech_probability(&frame)?;
+            let probability = match self.detector.speech_probability(&frame) {
+                Ok(probability) => probability,
+                Err(error) => {
+                    if self.in_speech {
+                        self.close(&mut events);
+                    } else {
+                        self.detector.reset();
+                    }
+                    self.pre_roll.clear();
+                    // Keep capture time advancing over discarded audio; never
+                    // replay a frame through a detector with uncertain state.
+                    self.position += (self.pending.len() - offset + frame_len) as u64;
+                    self.pending.clear();
+                    self.ready = events;
+                    return Err(error);
+                }
+            };
             self.step(&frame, probability, &mut events);
         }
         self.pending.drain(..offset);
@@ -141,7 +161,7 @@ impl VadGate {
 
     /// Closes any open utterance, e.g. when the session stops.
     pub fn flush(&mut self) -> Vec<GateEvent> {
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.ready);
         if self.in_speech {
             self.close(&mut events);
         }
@@ -215,6 +235,86 @@ fn push_speech(events: &mut Vec<GateEvent>, samples: &[f32]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    struct FailingVad {
+        calls: Arc<Mutex<Vec<f32>>>,
+        resets: Arc<Mutex<usize>>,
+        persistent: bool,
+    }
+
+    impl VoiceActivityDetector for FailingVad {
+        fn frame_len(&self) -> usize {
+            160
+        }
+
+        fn speech_probability(&mut self, frame: &[f32]) -> Result<f32, VadError> {
+            self.calls.lock().unwrap().push(frame[0]);
+            if self.persistent || frame[0] == 2.0 { Err(VadError("injected detector failure".into())) } else { Ok(0.9) }
+        }
+
+        fn reset(&mut self) {
+            *self.resets.lock().unwrap() += 1;
+        }
+    }
+
+    #[test]
+    fn detector_failure_keeps_prior_events_and_never_replays_consumed_audio() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let resets = Arc::new(Mutex::new(0));
+        let detector = FailingVad { calls: calls.clone(), resets: resets.clone(), persistent: false };
+        let mut gate = VadGate::new(Box::new(detector), GateConfig { pre_roll_ms: 0, ..Default::default() });
+        let mut audio = vec![1.0; 160];
+        audio.extend([2.0; 160]);
+        audio.extend([3.0; 80]);
+        assert!(gate.process(&audio).is_err());
+        assert!(!gate.is_in_speech());
+        assert_eq!(*resets.lock().unwrap(), 1);
+
+        let events = gate.process(&[4.0; 160]).unwrap();
+        assert_eq!(
+            events,
+            vec![
+                GateEvent::SpeechStarted { start_sample: 0 },
+                GateEvent::Speech(vec![1.0; 160]),
+                GateEvent::SpeechEnded { end_sample: 160 },
+                GateEvent::SpeechStarted { start_sample: 400 },
+                GateEvent::Speech(vec![4.0; 160]),
+            ]
+        );
+        assert_eq!(*calls.lock().unwrap(), [1.0, 2.0, 4.0]);
+        assert_eq!(gate.flush(), vec![GateEvent::SpeechEnded { end_sample: 560 }]);
+        assert!(gate.flush().is_empty());
+    }
+
+    #[test]
+    fn persistent_detector_failure_discards_pending_audio_and_resets_each_attempt() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let resets = Arc::new(Mutex::new(0));
+        let detector = FailingVad { calls: calls.clone(), resets: resets.clone(), persistent: true };
+        let mut gate = VadGate::new(Box::new(detector), GateConfig::default());
+        for value in 1..=4 {
+            assert!(gate.process(&[value as f32; 320]).is_err());
+            assert!(gate.process(&[]).unwrap().is_empty(), "failed input must not remain queued");
+            assert!(gate.flush().is_empty());
+        }
+        assert_eq!(*calls.lock().unwrap(), [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(*resets.lock().unwrap(), 4);
+    }
+
+    #[test]
+    fn detector_failure_flush_preserves_boundary_after_previously_delivered_speech() {
+        let detector =
+            FailingVad { calls: Arc::new(Mutex::new(Vec::new())), resets: Arc::new(Mutex::new(0)), persistent: false };
+        let mut gate = VadGate::new(Box::new(detector), GateConfig::default());
+        let started = gate.process(&[1.0; 160]).unwrap();
+        assert!(matches!(started.first(), Some(GateEvent::SpeechStarted { start_sample: 0 })));
+        let mut audio = vec![3.0; 160];
+        audio.extend([2.0; 160]);
+        assert!(gate.process(&audio).is_err());
+        assert_eq!(gate.flush(), vec![GateEvent::Speech(vec![3.0; 160]), GateEvent::SpeechEnded { end_sample: 320 }]);
+        assert!(gate.flush().is_empty());
+    }
 
     /// Detector that treats any non-zero frame as speech.
     struct ScriptedVad;

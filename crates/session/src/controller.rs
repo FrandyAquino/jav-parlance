@@ -167,7 +167,7 @@ impl SessionController {
             };
             if still_current {
                 (controller.events)(SessionEvent::Notice {
-                    notice: Notice::warning("Audio source ended; session stopped"),
+                    notice: Notice::warning("Audio pipeline ended; session stopped"),
                 });
                 if let Err(error) = controller.stop().await {
                     tracing::warn!(%error, "automatic stop failed");

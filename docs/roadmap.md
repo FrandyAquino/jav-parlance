@@ -1,5 +1,15 @@
 # Roadmap and progress
 
+## Audit blocker corrections — 2026-11-27
+
+Local corrections add session-scoped translation presentation, causal transcript/history ordering, preservation
+of successful ASR output after another decode fails, bounded VAD failure recovery, absolute LLM deadlines and
+bounded final draining. Linux child ownership and Chromium offscreen lifecycle now coordinate cleanup with
+reconnect/retry. Regression tests use scripted ports, temporary SQLite, loopback HTTP and controlled processes
+or Chrome API promises; see [testing](testing.md). These protections do not certify real devices, native
+permissions, model accuracy, browser capture or installer CPU compatibility. Verification evidence for this
+local implementation is kept separately from the prior audit snapshot.
+
 Source of truth for what works. "Verified" means exercised on real hardware, not only unit-tested.
 Last updated: 2026-11-25.
 

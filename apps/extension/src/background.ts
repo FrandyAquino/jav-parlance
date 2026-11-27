@@ -1,5 +1,13 @@
-import { AUDIO_PORT_NAME, NATIVE_HOST_NAME, PROTOCOL_VERSION } from "./lib/constants";
-import { describeError, disconnectReason, handshakeFailureReason } from "./lib/errors";
+import {
+  AUDIO_PORT_NAME,
+  NATIVE_HOST_NAME,
+  PROTOCOL_VERSION,
+} from "./lib/constants";
+import {
+  describeError,
+  disconnectReason,
+  handshakeFailureReason,
+} from "./lib/errors";
 import {
   type CaptureEvent,
   type CaptureStatus,
@@ -9,7 +17,12 @@ import {
   isCaptureEvent,
   isPopupRequest,
 } from "./lib/messages";
-import { END_MESSAGE, audioMessage, helloMessage, parseHostMessage } from "./lib/wire";
+import {
+  END_MESSAGE,
+  audioMessage,
+  helloMessage,
+  parseHostMessage,
+} from "./lib/wire";
 
 const OFFSCREEN_PATH = "offscreen.html";
 const FALLBACK_TAB_TITLE = "Browser tab";
@@ -24,24 +37,38 @@ let status: CaptureStatus = { state: "idle" };
 let session: Session | null = null;
 // Bumped by every start/stop so a superseded start bails out after each await.
 let generation = 0;
+let offscreenGeneration: number | null = null;
+// Chrome permits one offscreen document; its create/close operations must not overlap.
+let offscreenLifecycle: Promise<void> = Promise.resolve();
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!isPopupRequest(message)) return false;
-  void handlePopupRequest(message).then(sendResponse);
-  return true;
-});
+chrome.runtime.onMessage.addListener(
+  (message: unknown, _sender, sendResponse) => {
+    if (!isPopupRequest(message)) return false;
+    void handlePopupRequest(message).then(sendResponse);
+    return true;
+  },
+);
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== AUDIO_PORT_NAME || port.sender?.url !== chrome.runtime.getURL(OFFSCREEN_PATH)) {
+  const attempt = offscreenGeneration;
+  if (
+    port.name !== AUDIO_PORT_NAME ||
+    port.sender?.url !== chrome.runtime.getURL(OFFSCREEN_PATH) ||
+    attempt === null ||
+    attempt !== generation
+  ) {
     port.disconnect();
     return;
   }
   port.onMessage.addListener((event: unknown) => {
-    if (isCaptureEvent(event)) void handleCaptureEvent(event);
+    if (attempt === generation && isCaptureEvent(event))
+      void handleCaptureEvent(event);
   });
 });
 
-async function handlePopupRequest(request: PopupRequest): Promise<CaptureStatus> {
+async function handlePopupRequest(
+  request: PopupRequest,
+): Promise<CaptureStatus> {
   if (request.kind === "start") await startCapture();
   if (request.kind === "stop") await stopCapture({ state: "idle" });
   return status;
@@ -50,15 +77,22 @@ async function handlePopupRequest(request: PopupRequest): Promise<CaptureStatus>
 async function handleCaptureEvent(event: CaptureEvent): Promise<void> {
   switch (event.kind) {
     case "started":
-      if (session) setStatus({ state: "capturing", tabTitle: session.tabTitle });
+      if (session)
+        setStatus({ state: "capturing", tabTitle: session.tabTitle });
       return;
     case "frame":
-      if (session) session.host.postMessage(audioMessage(session.sequence++, event.pcm16Base64));
+      if (session)
+        session.host.postMessage(
+          audioMessage(session.sequence++, event.pcm16Base64),
+        );
       return;
     case "failed":
       return stopCapture({ state: "error", reason: event.reason });
     case "ended":
-      return stopCapture({ state: "error", reason: "The tab stopped sharing audio." });
+      return stopCapture({
+        state: "error",
+        reason: "The tab stopped sharing audio.",
+      });
   }
 }
 
@@ -69,7 +103,11 @@ async function startCapture(): Promise<void> {
   setStatus({ state: "starting" });
   try {
     const tab = await activeTab();
-    const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    if (attempt !== generation) return;
+    const streamId = await chrome.tabCapture.getMediaStreamId({
+      targetTabId: tab.id,
+    });
+    if (attempt !== generation) return;
     const tabTitle = tab.title || FALLBACK_TAB_TITLE;
     const host = await connectHost(tabTitle);
     if (attempt !== generation) {
@@ -78,11 +116,28 @@ async function startCapture(): Promise<void> {
     }
     session = { host, tabTitle, sequence: 0 };
     watchHost(host);
-    await resetOffscreenDocument();
-    const command: OffscreenCommand = { target: "offscreen", kind: "start", streamId };
-    await chrome.runtime.sendMessage(command);
+    await withOffscreenDocument(async () => {
+      if (attempt !== generation) return;
+      await closeOffscreenDocument();
+      if (attempt !== generation) return;
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_PATH,
+        reasons: [chrome.offscreen.Reason.USER_MEDIA],
+        justification:
+          "Process the captured tab audio and send it to the Parlance desktop app.",
+      });
+      if (attempt !== generation) return;
+      offscreenGeneration = attempt;
+      const command: OffscreenCommand = {
+        target: "offscreen",
+        kind: "start",
+        streamId,
+      };
+      await chrome.runtime.sendMessage(command);
+    });
   } catch (error) {
-    if (attempt === generation) await stopCapture({ state: "error", reason: describeError(error) });
+    if (attempt === generation)
+      await stopCapture({ state: "error", reason: describeError(error) });
   }
 }
 
@@ -91,13 +146,17 @@ async function stopCapture(next: CaptureStatus): Promise<void> {
   const current = session;
   session = null;
   if (current) closeHost(current.host);
-  await closeOffscreenDocument();
   setStatus(next);
+  await withOffscreenDocument(closeOffscreenDocument);
 }
 
 async function activeTab(): Promise<chrome.tabs.Tab & { id: number }> {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (tab?.id === undefined) throw new Error("There is no active tab to capture.");
+  const [tab] = await chrome.tabs.query({
+    active: true,
+    lastFocusedWindow: true,
+  });
+  if (tab?.id === undefined)
+    throw new Error("There is no active tab to capture.");
   return { ...tab, id: tab.id };
 }
 
@@ -112,7 +171,10 @@ function connectHost(tabTitle: string): Promise<chrome.runtime.Port> {
     const onReply = (raw: unknown) => {
       detach();
       const reply = parseHostMessage(raw);
-      if (reply?.type === "ready" && reply.protocolVersion === PROTOCOL_VERSION) {
+      if (
+        reply?.type === "ready" &&
+        reply.protocolVersion === PROTOCOL_VERSION
+      ) {
         resolve(host);
         return;
       }
@@ -121,7 +183,14 @@ function connectHost(tabTitle: string): Promise<chrome.runtime.Port> {
     };
     const onDisconnect = () => {
       detach();
-      reject(new Error(disconnectReason(chrome.runtime.lastError?.message, chrome.runtime.id)));
+      reject(
+        new Error(
+          disconnectReason(
+            chrome.runtime.lastError?.message,
+            chrome.runtime.id,
+          ),
+        ),
+      );
     };
     host.onMessage.addListener(onReply);
     host.onDisconnect.addListener(onDisconnect);
@@ -136,10 +205,13 @@ function watchHost(host: chrome.runtime.Port): void {
   host.onMessage.addListener((raw: unknown) => {
     const message = parseHostMessage(raw);
     if (message?.type === "unavailable") stopIfCurrent(message.reason);
-    if (message?.type === "error") stopIfCurrent(handshakeFailureReason(message));
+    if (message?.type === "error")
+      stopIfCurrent(handshakeFailureReason(message));
   });
   host.onDisconnect.addListener(() => {
-    stopIfCurrent(disconnectReason(chrome.runtime.lastError?.message, chrome.runtime.id));
+    stopIfCurrent(
+      disconnectReason(chrome.runtime.lastError?.message, chrome.runtime.id),
+    );
   });
 }
 
@@ -152,16 +224,14 @@ function closeHost(host: chrome.runtime.Port): void {
   host.disconnect();
 }
 
-async function resetOffscreenDocument(): Promise<void> {
-  await closeOffscreenDocument();
-  await chrome.offscreen.createDocument({
-    url: OFFSCREEN_PATH,
-    reasons: [chrome.offscreen.Reason.USER_MEDIA],
-    justification: "Process the captured tab audio and send it to the Parlance desktop app.",
-  });
+function withOffscreenDocument(operation: () => Promise<void>): Promise<void> {
+  const pending = offscreenLifecycle.then(operation);
+  offscreenLifecycle = pending.catch(() => undefined);
+  return pending;
 }
 
 async function closeOffscreenDocument(): Promise<void> {
+  offscreenGeneration = null;
   const contexts = await chrome.runtime.getContexts({
     contextTypes: [chrome.runtime.ContextType.OFFSCREEN_DOCUMENT],
   });

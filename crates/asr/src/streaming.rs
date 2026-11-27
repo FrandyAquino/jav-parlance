@@ -82,11 +82,12 @@ pub struct StreamingTranscriber<R> {
     next_id: u64,
     open: Option<Utterance>,
     closed: VecDeque<Utterance>,
+    ready: Vec<TranscriptSegment>,
 }
 
 impl<R: SpeechRecognizer> StreamingTranscriber<R> {
     pub fn new(recognizer: R, config: StreamingConfig) -> Self {
-        Self { recognizer, config, next_id: 1, open: None, closed: VecDeque::new() }
+        Self { recognizer, config, next_id: 1, open: None, closed: VecDeque::new(), ready: Vec::new() }
     }
 
     pub fn set_language(&mut self, language: Option<LanguageCode>) {
@@ -120,30 +121,34 @@ impl<R: SpeechRecognizer> StreamingTranscriber<R> {
         }
     }
 
-    /// Whether [`Self::poll`] would run the recognizer.
+    /// Whether [`Self::poll`] would deliver updates or run the recognizer.
     pub fn has_work(&self) -> bool {
-        !self.closed.is_empty() || self.open.as_ref().is_some_and(|u| self.partial_due(u))
+        !self.ready.is_empty() || !self.closed.is_empty() || self.open.as_ref().is_some_and(|u| self.partial_due(u))
     }
 
     /// Finalizes closed utterances first (they are user-visible commitments),
     /// then refreshes the open utterance's partial hypothesis when due.
+    /// Successful updates survive errors and are delivered by a later poll.
     pub fn poll(&mut self) -> Result<Vec<TranscriptSegment>, AsrError> {
-        let mut updates = Vec::new();
+        if !self.ready.is_empty() {
+            return Ok(std::mem::take(&mut self.ready));
+        }
         while let Some(mut utterance) = self.closed.pop_front() {
             if let Some(segment) = self.finalize(&mut utterance)? {
-                updates.push(segment);
+                self.ready.push(segment);
             }
         }
         if let Some(mut utterance) = self.open.take() {
             let due = self.partial_due(&utterance);
             let result = if due { self.refresh_partial(&mut utterance) } else { Ok(None) };
             self.open = Some(utterance);
-            updates.extend(result?);
+            self.ready.extend(result?);
         }
-        Ok(updates)
+        Ok(std::mem::take(&mut self.ready))
     }
 
-    /// Closes the open utterance and finalizes everything (session stop).
+    /// Closes the open utterance and polls pending finals. After an error,
+    /// drain while [`Self::has_work`] to deliver retained successful updates.
     pub fn flush(&mut self) -> Result<Vec<TranscriptSegment>, AsrError> {
         self.close_open();
         self.poll()
@@ -227,6 +232,83 @@ mod tests {
 
     fn one_second() -> GateEvent {
         GateEvent::Speech(vec![0.1; TARGET_SAMPLE_RATE as usize])
+    }
+
+    struct FallibleRecognizer {
+        results: VecDeque<Result<&'static str, &'static str>>,
+    }
+
+    impl SpeechRecognizer for FallibleRecognizer {
+        fn transcribe(&mut self, _audio: &[f32], _options: &DecodeOptions) -> Result<Hypothesis, AsrError> {
+            self.results
+                .pop_front()
+                .expect("one scripted result per decode")
+                .map(|text| Hypothesis { text: text.into(), language: None })
+                .map_err(|error| AsrError::Inference(error.into()))
+        }
+    }
+
+    fn queue_utterance<R: SpeechRecognizer>(t: &mut StreamingTranscriber<R>, start_sample: u64, closed: bool) {
+        t.push(GateEvent::SpeechStarted { start_sample });
+        t.push(one_second());
+        if closed {
+            t.push(GateEvent::SpeechEnded { end_sample: start_sample + 16_000 });
+        }
+    }
+
+    #[test]
+    fn successful_final_survives_a_later_final_error_exactly_once() {
+        let recognizer = FallibleRecognizer { results: VecDeque::from([Ok("first"), Err("second")]) };
+        let mut t = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+        queue_utterance(&mut t, 0, true);
+        queue_utterance(&mut t, 16_000, true);
+        assert!(t.poll().is_err());
+        assert!(t.has_work(), "a decoded final still needs delivery");
+        let updates = t.poll().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].id, SegmentId(1));
+        assert_eq!(updates[0].text(), "first");
+        assert!(updates[0].is_final());
+        assert!(!t.has_work());
+        assert!(t.flush().unwrap().is_empty());
+    }
+
+    #[test]
+    fn successful_final_survives_a_later_partial_error() {
+        let recognizer = FallibleRecognizer { results: VecDeque::from([Ok("first"), Err("partial"), Ok("last")]) };
+        let mut t = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+        queue_utterance(&mut t, 0, true);
+        queue_utterance(&mut t, 16_000, false);
+        assert!(t.poll().is_err());
+        let updates = t.poll().unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].text(), "first");
+        let final_updates = t.flush().unwrap();
+        assert_eq!(final_updates.len(), 1);
+        assert_eq!(final_updates[0].id, SegmentId(2));
+        assert_eq!(final_updates[0].revision, 0);
+        assert_eq!(final_updates[0].text(), "last");
+    }
+
+    #[test]
+    fn flush_preserves_successes_across_multiple_failures() {
+        let recognizer =
+            FallibleRecognizer { results: VecDeque::from([Ok("first"), Err("second"), Err("third"), Ok("fourth")]) };
+        let mut t = StreamingTranscriber::new(recognizer, StreamingConfig::default());
+        for index in 0..4 {
+            queue_utterance(&mut t, index * 16_000, index != 3);
+        }
+        let mut updates = Vec::new();
+        let mut errors = 0;
+        for _ in 0..4 {
+            match t.flush() {
+                Ok(segments) => updates.extend(segments),
+                Err(_) => errors += 1,
+            }
+        }
+        assert_eq!(errors, 2);
+        assert_eq!(updates.iter().map(|segment| segment.id).collect::<Vec<_>>(), [SegmentId(1), SegmentId(4)]);
+        assert!(!t.has_work());
     }
 
     struct AmbiguousStart;
