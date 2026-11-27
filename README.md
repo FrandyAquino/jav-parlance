@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/parlance-mark.png" width="112" height="112" alt="Parlance logo">
+</p>
+
 <h1 align="center">Parlance</h1>
 
 <p align="center"><strong>Your meetings. Your machine.</strong></p>
