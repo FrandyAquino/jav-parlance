@@ -4,6 +4,37 @@ Fork the repository, create a branch, and open a pull request against `main`.
 Keep changes focused and describe the problem, the resulting behavior, and how you
 tested it. For substantial features, open an issue first to discuss the approach.
 
+## Your first contribution
+
+You do not need a GPU or every supported operating system to contribute. Documentation,
+frontend tests, accessibility improvements, and a clear bug reproduction are useful
+starting points. See the [roadmap](docs/roadmap.md) for platform validation gaps.
+
+1. Check existing issues and PRs for related work.
+2. For a bug, use the bug report form and include your build, OS, models, and steps.
+3. For a feature, describe the user problem before starting a large implementation.
+4. Open a focused PR with verification results. Explain anything you could not test.
+
+Use synthetic or public-domain speech for shared reproductions. Never attach private
+meeting audio, transcripts, tokens, or personal information. Report vulnerabilities
+through the [private security channel](SECURITY.md), not a public issue.
+
+Be respectful and specific in discussions. Critique changes and ideas, not people.
+Submitting a contribution means you agree to license it under the project's
+[MIT license](LICENSE); preserve notices for third-party material.
+
+## How pull requests are reviewed
+
+Passing CI is necessary, but a maintainer also checks scope, correctness, privacy,
+platform impact, and verification evidence before merging. PRs are not automatically
+accepted, including dependency updates. Breaking dependency upgrades need their own
+compatibility assessment. Keep generated files and lockfiles in the same PR as the
+change that requires them.
+
+Dependabot checks weekly, groups minor/patch updates, and limits concurrent version
+update PRs to keep the queue manageable. Existing PRs are not automatically closed by
+those limits, and security update PRs are handled separately by GitHub.
+
 ## Local checks
 
 Install the prerequisites in the [README](README.md#develop) and the platform

@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.85"
-repository = "https://github.com/parlance-app/parlance"
+repository = "https://github.com/FrandyAquino/jav-parlance"
 
 [workspace.dependencies]
 parlance-domain = { path = "crates/domain" }
