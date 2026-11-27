@@ -1,7 +1,8 @@
 # Architecture overview
 
 Parlance is a single-user desktop app. Audio is captured, transcribed, translated and answered on the
-device. The only network traffic is the model downloads the user starts.
+device. External network requests download the models and runtime the user selects;
+inference uses the local authenticated sidecar.
 
 ## System context
 
@@ -164,9 +165,9 @@ stateDiagram-v2
 
 | Platform | Native capture | Status |
 | --- | --- | --- |
-| Windows 10/11 | WASAPI endpoint loopback, process loopback (build ≥ 20348), microphones | Verified end-to-end |
-| Linux | `pactl`/`parec` over the PulseAudio protocol (PulseAudio or pipewire-pulse) | Compiles, never run |
-| macOS | none (`platform_backend()` returns `Unsupported`) | Planned: Core Audio taps |
+| Windows 10/11 | WASAPI endpoint loopback, process loopback (build ≥ 20348), microphones | Windows 11 loopback verified; live per-app/microphone acceptance remains pending |
+| Linux | `pactl`/`parec` over the PulseAudio protocol (PulseAudio or pipewire-pulse) | Builds and isolated process-lifecycle tests; real desktop audio acceptance pending |
+| macOS 13.3+ | `MacosBackend`: Core Audio taps on 14.2+, ScreenCaptureKit fallback, Core Audio microphone | Apple Silicon exercised; Intel and 13.3–14.1 fallback acceptance pending |
 | Any Chromium browser | MV3 extension + native host + bridge | Tests pass; not yet loaded in a real browser |
 
 See [`docs/platform/`](../platform/) and the ADRs in [`docs/adr/`](../adr/).

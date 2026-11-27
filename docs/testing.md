@@ -18,7 +18,27 @@ pnpm -C apps/extension typecheck && pnpm -C apps/extension lint && pnpm -C apps/
 
 `cargo test --workspace` builds `apps/desktop/src-tauri`, whose `tauri::generate_context!` embeds
 `apps/desktop/dist`. Run `pnpm -C apps/desktop build` first (or `mkdir apps/desktop/dist`). The desktop crate itself
-has `test = false` (Windows test binaries lack the Common Controls manifest); it is pure wiring.
+has `test = false` by default (Windows test binaries lack the Common Controls manifest).
+On Linux, CI additionally runs `cargo test --locked -p parlance-desktop --lib` to exercise
+the real event hub and history composition without launching a webview.
+
+## Failure and lifecycle regressions
+
+- ASR retains successful finals when a later decode fails, including terminal flush.
+- VAD failures preserve valid boundaries, discard uncertain input and stop the DSP stage without replaying audio.
+- Desktop wiring rejects previous-session translations while retaining their original history, and enqueues
+  history segments before derivative translation callbacks. ASR publishes Transcript before listeners.
+- Local HTTP fixtures cover stalled health headers, generation headers/SSE, cancellation and total budgets.
+  Translation Stop drains healthy finals, then cancels stalled work and releases the history sink with a warning.
+- Linux capture tests use a controlled fake `parec` process to check reaping and cancellation during reconnect.
+  The two ignored subprocess helpers are invoked by the tests; they are not skipped acceptance cases.
+- Extension lifecycle tests use deferred Chrome API promises for disconnect during creation, cleanup/retry
+  ordering and stale port events. They do not replace a real Chrome/Edge capture session.
+
+Use a disposable isolated environment for failure injection. Synthetic subprocess fixtures need an executable
+temporary filesystem and loopback HTTP tests need the container's own loopback interface; external network
+access, host credentials and production user data are unnecessary. A passing test does not certify native
+devices, OS permissions, real model accuracy or installer CPU compatibility.
 
 Clippy: `unwrap_used` warns outside tests (`clippy.toml` allows `unwrap`/`expect` in tests); integration test files
 start with `#![allow(clippy::unwrap_used, clippy::expect_used)]`.

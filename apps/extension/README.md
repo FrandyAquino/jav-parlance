@@ -1,3 +1,5 @@
+<p><img src="public/icons/128.png" width="64" height="64" alt="Parlance logo"></p>
+
 # Parlance tab audio (Chromium extension)
 
 Captures the audio of one browser tab (Meet, Teams web, Zoom web…) and streams it to the Parlance desktop

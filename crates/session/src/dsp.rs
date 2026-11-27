@@ -129,7 +129,7 @@ impl DspStage {
         received
     }
 
-    /// Returns `false` when the ASR stage is gone.
+    /// Returns `false` when ASR is gone or VAD fails.
     fn process(&mut self, samples: &[f32]) -> bool {
         let events = &self.events;
         self.meter.feed(samples, |level| events(SessionEvent::Level { level }));
@@ -146,7 +146,12 @@ impl DspStage {
             Ok(gate_events) => gate_events.into_iter().all(|event| self.asr.send(event).is_ok()),
             Err(error) => {
                 (self.events)(SessionEvent::Notice { notice: Notice::error(error.to_string()) });
-                true
+                for event in self.gate.flush() {
+                    if self.asr.send(event).is_err() {
+                        break;
+                    }
+                }
+                false
             }
         }
     }
@@ -163,5 +168,62 @@ impl DspStage {
             (self.events)(SessionEvent::Notice { notice: Notice::warning(message) });
             self.reported_drops = dropped;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, mpsc};
+
+    use parlance_audio::vad::{GateConfig, VadError, VoiceActivityDetector};
+
+    struct TransientFailure;
+
+    impl VoiceActivityDetector for TransientFailure {
+        fn frame_len(&self) -> usize {
+            160
+        }
+
+        fn speech_probability(&mut self, frame: &[f32]) -> Result<f32, VadError> {
+            if frame[0] == 2.0 { Err(VadError("injected failure".into())) } else { Ok(0.9) }
+        }
+    }
+
+    #[test]
+    fn vad_error_stops_dsp_and_forwards_valid_audio_with_its_closing_boundary() {
+        let notices = Arc::new(Mutex::new(Vec::new()));
+        let recorded = notices.clone();
+        let events: EventSink = Arc::new(move |event| {
+            if let SessionEvent::Notice { notice } = event {
+                recorded.lock().unwrap().push(notice);
+            }
+        });
+        let (tx, rx) = mpsc::sync_channel(8);
+        let mut stage = DspStage::new(
+            Vec::new(),
+            VadGate::new(Box::new(TransientFailure), GateConfig::default()),
+            events,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+        assert!(stage.process(&[1.0; 160]));
+        let mut input = vec![3.0; 160];
+        input.extend([2.0; 160]);
+        input.extend([4.0; 160]);
+        assert!(!stage.process(&input), "a VAD error must stop the DSP run loop");
+        drop(stage);
+        assert_eq!(
+            rx.into_iter().collect::<Vec<_>>(),
+            vec![
+                GateEvent::SpeechStarted { start_sample: 0 },
+                GateEvent::Speech(vec![1.0; 160]),
+                GateEvent::Speech(vec![3.0; 160]),
+                GateEvent::SpeechEnded { end_sample: 320 },
+            ]
+        );
+        assert_eq!(notices.lock().unwrap().len(), 1);
     }
 }

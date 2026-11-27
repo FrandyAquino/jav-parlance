@@ -11,6 +11,10 @@ use crate::sse::{SseItem, SseParser};
 use crate::{ChatRequest, LanguageModel, LlmError, OnToken};
 
 const READY_WAIT: Duration = Duration::from_secs(2);
+/// CPU inference can be slow; a complete local generation still has a three-minute ceiling.
+const GENERATION_TIMEOUT: Duration = Duration::from_secs(180);
+/// Allow slow prompt evaluation and token generation, but end a minute of HTTP/SSE silence.
+const GENERATION_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// [`LanguageModel`] backed by the supervised `llama-server`.
 #[derive(Debug, Clone)]
@@ -67,34 +71,46 @@ async fn request_completion(
     cancel: &CancellationToken,
     on_token: &OnToken<'_>,
 ) -> Result<String, LlmError> {
-    let response = http
-        .post(format!("{}/v1/chat/completions", endpoint.base_url))
-        .bearer_auth(&endpoint.api_key)
-        .json(&body(&request))
-        .send()
+    let completion = async {
+        let response = tokio::time::timeout(
+            GENERATION_IDLE_TIMEOUT,
+            http.post(format!("{}/v1/chat/completions", endpoint.base_url))
+                .bearer_auth(&endpoint.api_key)
+                .json(&body(&request))
+                .send(),
+        )
         .await
+        .map_err(|_| LlmError::Request("The model did not respond in time. Try again.".into()))?
         .and_then(reqwest::Response::error_for_status)
         .map_err(|e| LlmError::Request(e.to_string()))?;
-    let mut stream = response.bytes_stream();
-    let mut parser = SseParser::default();
-    let mut output = String::new();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| LlmError::Request(e.to_string()))?;
-        for item in parser.push(&chunk) {
-            if cancel.is_cancelled() {
-                return Err(LlmError::Cancelled);
-            }
-            match item {
-                SseItem::Token(token) => {
-                    on_token(&token);
-                    output.push_str(&token);
+        let mut stream = response.bytes_stream();
+        let mut parser = SseParser::default();
+        let mut output = String::new();
+        loop {
+            let chunk = tokio::time::timeout(GENERATION_IDLE_TIMEOUT, stream.next())
+                .await
+                .map_err(|_| LlmError::Request("The model stream stalled. Try again.".into()))?;
+            let Some(chunk) = chunk else { break };
+            let chunk = chunk.map_err(|e| LlmError::Request(e.to_string()))?;
+            for item in parser.push(&chunk) {
+                if cancel.is_cancelled() {
+                    return Err(LlmError::Cancelled);
                 }
-                SseItem::Done => return Ok(output),
-                SseItem::Failed(error) => return Err(LlmError::Request(error)),
+                match item {
+                    SseItem::Token(token) => {
+                        on_token(&token);
+                        output.push_str(&token);
+                    }
+                    SseItem::Done => return Ok(output),
+                    SseItem::Failed(error) => return Err(LlmError::Request(error)),
+                }
             }
         }
-    }
-    Err(LlmError::Request("The model stream ended before completion. Try again.".into()))
+        Err(LlmError::Request("The model stream ended before completion. Try again.".into()))
+    };
+    tokio::time::timeout(GENERATION_TIMEOUT, completion)
+        .await
+        .map_err(|_| LlmError::Request("The model generation exceeded its time limit. Try again.".into()))?
 }
 
 #[cfg(test)]
@@ -120,6 +136,144 @@ mod streaming_tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
+
+    // A controlled loopback peer can hold headers or keep an SSE response open.
+    async fn controlled_peer()
+    -> (Endpoint, tokio::sync::mpsc::UnboundedSender<&'static str>, oneshot::Receiver<()>, tokio::task::JoinHandle<()>)
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint =
+            Endpoint { base_url: format!("http://{}", listener.local_addr().unwrap()), api_key: "test".into() };
+        let (send, mut receive) = tokio::sync::mpsc::unbounded_channel::<&'static str>();
+        let (entered, wait) = oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 8192];
+            let mut received = Vec::new();
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                received.extend_from_slice(&buffer[..count]);
+                assert!(received.len() < 65_536);
+                if let Some(end) = received.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = std::str::from_utf8(&received[..end]).unwrap();
+                    let length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap();
+                    if received.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            entered.send(()).unwrap();
+            while let Some(bytes) = receive.recv().await {
+                if socket.write_all(bytes.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        (endpoint, send, wait, peer)
+    }
+
+    const OPEN_STREAM: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n";
+    const MORE_TOKEN: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"more\"}}]}\n\n";
+
+    async fn assert_stall_is_bounded(streaming: bool) {
+        let (endpoint, send, entered, peer) = controlled_peer().await;
+        let (tokens, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            request_completion(&reqwest::Client::new(), &endpoint, request(), &CancellationToken::new(), &|_| {
+                tokens.send(()).unwrap();
+            })
+            .await
+        });
+        entered.await.unwrap();
+        if streaming {
+            send.send(OPEN_STREAM).unwrap();
+            received.recv().await.unwrap();
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(65)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("stalled generation must end without waiting for the server")
+            .unwrap();
+        assert!(matches!(result, Err(LlmError::Request(_))));
+        drop(send);
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generation_deadline_bounds_pending_headers() {
+        assert_stall_is_bounded(false).await;
+    }
+
+    #[tokio::test]
+    async fn generation_inactivity_bounds_stalled_sse() {
+        assert_stall_is_bounded(true).await;
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_a_stalled_sse_stream() {
+        let (endpoint, send, entered, peer) = controlled_peer().await;
+        let cancel = CancellationToken::new();
+        let token = cancel.clone();
+        let (tokens, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            cancellable(
+                token.clone(),
+                request_completion(&reqwest::Client::new(), &endpoint, request(), &token, &|_| {
+                    tokens.send(()).unwrap();
+                }),
+            )
+            .await
+        });
+        entered.await.unwrap();
+        send.send(OPEN_STREAM).unwrap();
+        received.recv().await.unwrap();
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap();
+        assert!(matches!(result, Err(LlmError::Cancelled)));
+        assert!(received.recv().await.is_none());
+        drop(send);
+        peer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn generation_total_deadline_bounds_an_active_stream() {
+        let (endpoint, send, entered, peer) = controlled_peer().await;
+        let (tokens, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            request_completion(&reqwest::Client::new(), &endpoint, request(), &CancellationToken::new(), &|_| {
+                tokens.send(()).unwrap();
+            })
+            .await
+        });
+        entered.await.unwrap();
+        send.send(OPEN_STREAM).unwrap();
+        received.recv().await.unwrap();
+        // Resume time for loopback I/O, then advance only after each token was consumed.
+        for _ in 0..5 {
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(30)).await;
+            tokio::time::resume();
+            send.send(MORE_TOKEN).unwrap();
+            tokio::time::timeout(Duration::from_secs(2), received.recv()).await.unwrap().unwrap();
+        }
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(35)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("continuous tokens must not extend the total generation budget")
+            .unwrap();
+        assert!(matches!(result, Err(LlmError::Request(_))));
+        drop(send);
+        peer.await.unwrap();
+    }
 
     fn request() -> ChatRequest {
         ChatRequest { messages: vec![ChatMessage::user("hi")], max_tokens: 160, temperature: 0.0 }

@@ -69,6 +69,10 @@ jobs:
       - name: Test
         run: cargo test --locked --workspace
 
+      - name: Desktop event and history wiring
+        if: runner.os == 'Linux'
+        run: cargo test --locked -p parlance-desktop --lib
+
       # cargo test regenerates the ts-rs contracts; committed bindings must match.
       - name: Check generated bindings
         shell: bash

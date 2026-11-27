@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::LlmError;
 
+/// Loading a local model may take minutes, but even pending health headers must fit this budget.
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const HEALTH_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -309,15 +310,17 @@ fn forward_logs(stream: Option<impl tokio::io::AsyncRead + Unpin + Send + 'stati
 
 async fn wait_healthy(http: &reqwest::Client, endpoint: &Endpoint) -> Result<(), String> {
     let url = format!("{}/health", endpoint.base_url);
-    let deadline = tokio::time::Instant::now() + READY_TIMEOUT;
-    while tokio::time::Instant::now() < deadline {
-        let response = http.get(&url).bearer_auth(&endpoint.api_key).send().await;
-        if response.is_ok_and(|r| r.status().is_success()) {
-            return Ok(());
+    tokio::time::timeout(READY_TIMEOUT, async {
+        loop {
+            let response = http.get(&url).bearer_auth(&endpoint.api_key).send().await;
+            if response.is_ok_and(|r| r.status().is_success()) {
+                return;
+            }
+            tokio::time::sleep(HEALTH_INTERVAL).await;
         }
-        tokio::time::sleep(HEALTH_INTERVAL).await;
-    }
-    Err(format!("not healthy after {READY_TIMEOUT:?}"))
+    })
+    .await
+    .map_err(|_| format!("not healthy after {READY_TIMEOUT:?}"))
 }
 
 /// The first generation pays for GPU shader compilation and cache setup
@@ -353,6 +356,33 @@ fn random_key() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn readiness_deadline_bounds_pending_health_headers() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint =
+            Endpoint { base_url: format!("http://{}", listener.local_addr().unwrap()), api_key: "test".into() };
+        let (entered, wait) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 8192];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            entered.send(()).unwrap();
+            assert_eq!(socket.read(&mut buffer).await.unwrap(), 0);
+        });
+        let task = tokio::spawn(async move { wait_healthy(&reqwest::Client::new(), &endpoint).await });
+        wait.await.unwrap();
+        tokio::time::pause();
+        tokio::time::advance(READY_TIMEOUT + Duration::from_secs(1)).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("a pending health request must not outlive readiness")
+            .unwrap();
+        assert!(result.unwrap_err().contains("not healthy"));
+        tokio::time::resume();
+        tokio::time::timeout(Duration::from_secs(2), peer).await.unwrap().unwrap();
+    }
 
     #[test]
     fn binds_loopback_only_with_auth() {

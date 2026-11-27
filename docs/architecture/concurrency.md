@@ -68,9 +68,20 @@ min partial 500 ms, VAD gate 0.5/0.35 thresholds, 600 ms min silence, 200 ms pre
 - LLM cancellation includes readiness and HTTP headers as well as SSE. A premature stream ending or token-limit finish is an error, not a complete reply.
 - Translation: `on_session_end` closes the queue so final jobs can drain. Obsolete partial futures are cancelled
   and dropped, including while waiting for model readiness/HTTP headers; intentional preemption emits no error.
+  Healthy finals may drain for ten seconds after session end; remaining work is cancelled and dropped with a
+  warning. The lifecycle supervisor is created on the Tokio runtime, not on the ASR callback thread.
 - Downloads: `cancel_download` cancels the token for that id; the partial file is removed.
 
 ## Shutdown ordering (`RunningPipeline::shutdown`, called from `SessionController::stop`)
+
+ASR publishes each transcript before notifying derivative listeners. The desktop enqueues the history segment
+before invoking translation listeners, so even an immediate translation cannot overtake its row. Successful
+ASR results retained across an inference error are drained before listeners receive session end.
+
+Each desktop translation sink belongs to one capture generation. A new capture advances that generation
+under the same mutex used to deliver channel events, so old results cannot reach the new transcript. Stop
+alone does not advance it: the current session can still display healthy late finals. The history tee retains
+its original recorder and receives those finals before the presentation filter. No IPC payload changed.
 
 ```mermaid
 sequenceDiagram
@@ -91,6 +102,8 @@ sequenceDiagram
 
 The same path runs automatically when every source ends: producers are abandoned → DSP exits → ASR finishes →
 the controller's watcher task calls `stop()`.
+VAD failure reports an error, forwards valid retained boundaries and stops DSP; the same completion path
+then stops capture. Uncertain samples are discarded rather than replayed into a partially advanced gate.
 
 App exit (`RunEvent::ExitRequested`) prevents exit until the active start/stop request settles, stops capture,
 allows final translations/history up to 15 seconds to drain, then awaits LLM termination and joins writers.
@@ -104,6 +117,7 @@ app is SIGKILLed. The guardian terminates the sidecar on EOF.
 **llama-server** (`crates/llm/src/server.rs`):
 
 - Free loopback port + random 48-hex API key per launch; `/health` polled every 500 ms for up to 180 s.
+  That absolute budget includes a pending HTTP response, not only intervals between requests.
 - One warm-up completion (`max_tokens: 1`) before reporting `Ready`, to pay shader compilation up front.
 - Exit during start-up → `FailedToStart`; exit after ready → `Exited` (backoff reset to 1 s).
 - Backoff 1 s doubling to 30 s (`MAX_BACKOFF`) between attempts; status published on a `watch` channel
@@ -112,6 +126,8 @@ app is SIGKILLed. The guardian terminates the sidecar on EOF.
   supervisor's life.
 - Requests wait at most 2 s for readiness (`READY_WAIT`), then fail with `Unavailable`; translation reports the
   first failure once per session.
+- Generation has a 180-second total budget and a 60-second header/chunk inactivity budget. Cancellation still
+  interrupts these waits; expiry is reported as an error rather than a completed answer.
 
 **WASAPI** (`crates/capture/src/windows/stream.rs`):
 
